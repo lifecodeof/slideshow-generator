@@ -1,6 +1,6 @@
 use clap::Parser;
 use log::{error, info};
-use slideshow_generator::{SlideshowGenerator, SlideshowOptions};
+use slideshow_generator::{SlideshowGenerator, SlideshowOptions, BuiltinTransition};
 use std::path::PathBuf;
 
 #[derive(Parser)]
@@ -15,9 +15,9 @@ struct Cli {
     #[arg(short, long, default_value = "output.mp4")]
     output: PathBuf,
 
-    /// Duration in seconds for each image
+    /// Duration in seconds for each slide
     #[arg(short = 'd', long, default_value = "3.0")]
-    image_duration: f32,
+    duration_per_slide: f32,
 
     /// Output video width
     #[arg(short = 'W', long, default_value = "1920")]
@@ -27,13 +27,9 @@ struct Cli {
     #[arg(short = 'H', long, default_value = "1080")]
     height: u32,
 
-    /// Output video frame rate
-    #[arg(short, long, default_value = "30")]
-    fps: u32,
-
-    /// Video codec to use
-    #[arg(short, long, default_value = "libx264")]
-    codec: String,
+    /// Transition type between slides
+    #[arg(short = 't', long, default_value = "none")]
+    transition: String,
 
     /// Enable verbose logging
     #[arg(short, long)]
@@ -60,12 +56,16 @@ fn main() -> anyhow::Result<()> {
 
     info!("Loading media files from: {}", cli.input.display());
 
+    // Parse transition from string
+    let transition = cli.transition.parse::<BuiltinTransition>()
+        .map_err(|e| anyhow::anyhow!("Invalid transition '{}': {}", cli.transition, e))?;
+
     // Create slideshow options from CLI arguments
     let options = SlideshowOptions::new()
-        .with_image_duration(cli.image_duration)
+        .with_duration_per_slide(cli.duration_per_slide)
         .with_output_resolution(cli.width, cli.height)
-        .with_fps(cli.fps)
-        .with_codec(&cli.codec);
+        .with_output_path(&cli.output)
+        .with_transition(transition);
 
     // Create generator with custom options
     let generator = SlideshowGenerator::from_directory(&cli.input, options)?;

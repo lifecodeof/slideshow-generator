@@ -1,4 +1,4 @@
-use slideshow_generator::{SlideshowGenerator, SlideshowOptions, quick_slideshow};
+use slideshow_generator::{SlideshowGenerator, SlideshowOptions, quick_slideshow, BuiltinTransition};
 use anyhow::Result;
 use std::path::PathBuf;
 use log::{info, warn};
@@ -22,10 +22,9 @@ fn main() -> Result<()> {
     // Example 2: Custom slideshow with options
     info!("2. Custom slideshow with options:");
     let options = SlideshowOptions::new()
-        .with_image_duration(5.0)  // 5 seconds per image
+        .with_duration_per_slide(5.0)  // 5 seconds per slide
         .with_output_resolution(1280, 720)  // 720p output
-        .with_fps(24)  // 24 fps
-        .with_codec("libx265");  // H.265 codec
+        .with_transition(BuiltinTransition::Fade { duration: 1.0 });  // Add fade transition
 
     match SlideshowGenerator::from_directory("test_images", options) {
         Ok(generator) => {
@@ -85,22 +84,22 @@ fn main() -> Result<()> {
     let mut generator = SlideshowGenerator::new();
     
     // Start with default options
-    info!("   Default options: {}s per image, {}x{} resolution", 
-        generator.options().image_duration,
-        generator.options().width, 
-        generator.options().height);
+    info!("   Default options: {}s per slide, {}x{} resolution", 
+        generator.options().duration_per_slide,
+        generator.options().output_width, 
+        generator.options().output_height);
 
     // Change options at runtime
     let new_options = SlideshowOptions::new()
-        .with_image_duration(2.0)
+        .with_duration_per_slide(2.0)
         .with_output_resolution(854, 480);  // 480p
     
     generator.set_options(new_options);
     
-    info!("   Updated options: {}s per image, {}x{} resolution", 
-        generator.options().image_duration,
-        generator.options().width, 
-        generator.options().height);
+    info!("   Updated options: {}s per slide, {}x{} resolution", 
+        generator.options().duration_per_slide,
+        generator.options().output_width, 
+        generator.options().output_height);
 
     info!("=== Examples completed ===");
     info!("Note: Some operations may fail if test files don't exist, which is normal for this demo.");

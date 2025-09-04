@@ -18,7 +18,7 @@
 //! 
 //! # fn main() -> anyhow::Result<()> {
 //! let options = SlideshowOptions::new()
-//!     .with_image_duration(3.0)
+//!     .with_duration_per_slide(3.0)
 //!     .with_output_resolution(1920, 1080);
 //! 
 //! let generator = SlideshowGenerator::from_directory("input_folder", options)?;
@@ -30,10 +30,12 @@
 pub mod media;
 pub mod slideshow;
 pub mod utils;
+pub mod transitions;
 
 // Re-export the main types for convenience
 pub use slideshow::{SlideshowGenerator, SlideshowOptions};
 pub use media::{Image, Video};
+pub use transitions::{SlideshowTransition, BuiltinTransition, SlideDirection, WipeDirection};
 
 use std::path::Path;
 use anyhow::Result;
