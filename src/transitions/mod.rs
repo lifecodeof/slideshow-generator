@@ -52,7 +52,7 @@ pub enum BuiltinTransition {
 }
 
 /// Direction for slide transitions
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum SlideDirection {
     Left,
     Right, 
@@ -61,7 +61,7 @@ pub enum SlideDirection {
 }
 
 /// Direction for wipe transitions
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum WipeDirection {
     Left,
     Right,
