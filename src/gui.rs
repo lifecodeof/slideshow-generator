@@ -11,6 +11,7 @@ use std::thread;
 
 #[derive(Clone, PartialEq)]
 enum TransitionType {
+    Every,
     None,
     Fade,
     Dissolve,
@@ -21,6 +22,7 @@ enum TransitionType {
 impl TransitionType {
     fn to_builtin(&self, duration: f32) -> BuiltinTransition {
         match self {
+            TransitionType::Every => BuiltinTransition::None, // This won't be used for Every
             TransitionType::None => BuiltinTransition::None,
             TransitionType::Fade => BuiltinTransition::fade(duration),
             TransitionType::Dissolve => BuiltinTransition::dissolve(duration),
@@ -31,6 +33,7 @@ impl TransitionType {
 
     fn name(&self) -> &str {
         match self {
+            TransitionType::Every => "Every",
             TransitionType::None => "None",
             TransitionType::Fade => "Fade",
             TransitionType::Dissolve => "Dissolve",
@@ -73,8 +76,8 @@ impl Default for SlideshowApp {
             use_custom_dimensions: false,
             width: 1920,
             height: 1080,
-            transition: TransitionType::None,
-            transition_duration: 1.0,
+            transition: TransitionType::Every,
+            transition_duration: 0.5,
             status: "Ready".to_string(),
             generating: false,
             tx,
@@ -177,6 +180,7 @@ impl eframe::App for SlideshowApp {
             egui::ComboBox::from_label("")
                 .selected_text(self.transition.name())
                 .show_ui(ui, |ui| {
+                    ui.selectable_value(&mut self.transition, TransitionType::Every, "Every");
                     ui.selectable_value(&mut self.transition, TransitionType::None, "None");
                     ui.selectable_value(&mut self.transition, TransitionType::Fade, "Fade");
                     ui.selectable_value(&mut self.transition, TransitionType::Dissolve, "Dissolve");
@@ -232,7 +236,7 @@ impl eframe::App for SlideshowApp {
                     );
                 });
 
-            if !matches!(self.transition, TransitionType::None) {
+            if !matches!(self.transition, TransitionType::None | TransitionType::Every) {
                 ui.horizontal(|ui| {
                     ui.label("Transition duration (seconds):");
                     ui.add(
@@ -312,7 +316,8 @@ impl SlideshowApp {
         } else {
             None
         };
-        let transition = self.transition.to_builtin(self.transition_duration);
+        let transition = self.transition.clone();
+        let transition_duration = self.transition_duration;
         let tx = self.tx.clone();
 
         self.generating = true;
@@ -320,9 +325,101 @@ impl SlideshowApp {
 
         thread::spawn(move || {
             let result = (|| {
+                match transition {
+                    TransitionType::Every => {
+                        // Generate all transitions in parallel
+                        Self::generate_all_transitions(
+                            input_dir,
+                            output_path,
+                            duration_per_slide,
+                            dimensions,
+                            transition_duration,
+                        )
+                    }
+                    _ => {
+                        // Generate single slideshow
+                        let builtin_transition = transition.to_builtin(transition_duration);
+                        let mut options = SlideshowOptions::new()
+                            .with_duration_per_slide(duration_per_slide)
+                            .with_transition(builtin_transition);
+
+                        if let Some((width, height)) = dimensions {
+                            options = options.with_output_resolution(width, height);
+                        }
+
+                        let generator = SlideshowGenerator::from_directory(input_dir, options)?;
+                        generator.generate(output_path)?;
+                        Ok(())
+                    }
+                }
+            })();
+
+            let _ = tx.send(result.map_err(|e: anyhow::Error| e.to_string()));
+        });
+    }
+
+    fn generate_all_transitions(
+        input_dir: PathBuf,
+        base_output_path: PathBuf,
+        duration_per_slide: f32,
+        dimensions: Option<(u32, u32)>,
+        transition_duration: f32,
+    ) -> Result<(), anyhow::Error> {
+        // Define all transitions to generate
+        let transitions = vec![
+            (TransitionType::None, "none"),
+            (TransitionType::Fade, "fade"),
+            (TransitionType::Dissolve, "dissolve"),
+            (TransitionType::Slide(SlideDirection::Left), "slide-left"),
+            (TransitionType::Slide(SlideDirection::Right), "slide-right"),
+            (TransitionType::Slide(SlideDirection::Up), "slide-up"),
+            (TransitionType::Slide(SlideDirection::Down), "slide-down"),
+            (TransitionType::Wipe(WipeDirection::Left), "wipe-left"),
+            (TransitionType::Wipe(WipeDirection::Right), "wipe-right"),
+            (TransitionType::Wipe(WipeDirection::Up), "wipe-up"),
+            (TransitionType::Wipe(WipeDirection::Down), "wipe-down"),
+            (TransitionType::Wipe(WipeDirection::DiagonalTL), "wipe-diagonal-tl-br"),
+            (TransitionType::Wipe(WipeDirection::DiagonalTR), "wipe-diagonal-tr-bl"),
+        ];
+
+        // Create output directory if it doesn't exist
+        if let Some(parent) = base_output_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+
+        // Generate base filename without extension
+        let base_name = base_output_path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("slideshow");
+        let extension = base_output_path
+            .extension()
+            .and_then(|s| s.to_str())
+            .unwrap_or("mp4");
+
+        // Spawn threads for parallel generation
+        let mut handles: Vec<thread::JoinHandle<Result<(), anyhow::Error>>> = vec![];
+
+        for (transition_type, suffix) in transitions {
+            let input_dir = input_dir.clone();
+            let dimensions = dimensions;
+            let duration_per_slide = duration_per_slide;
+            let transition_duration = transition_duration;
+
+            let output_path = if suffix == "none" {
+                // For "none", use the base filename without suffix
+                base_output_path.clone()
+            } else {
+                // For others, add the suffix before extension
+                let file_name = format!("{}.{}.{}", base_name, suffix, extension);
+                base_output_path.with_file_name(file_name)
+            };
+
+            let handle = thread::spawn(move || {
+                let builtin_transition = transition_type.to_builtin(transition_duration);
                 let mut options = SlideshowOptions::new()
                     .with_duration_per_slide(duration_per_slide)
-                    .with_transition(transition);
+                    .with_transition(builtin_transition);
 
                 if let Some((width, height)) = dimensions {
                     options = options.with_output_resolution(width, height);
@@ -331,10 +428,17 @@ impl SlideshowApp {
                 let generator = SlideshowGenerator::from_directory(input_dir, options)?;
                 generator.generate(output_path)?;
                 Ok(())
-            })();
+            });
 
-            let _ = tx.send(result.map_err(|e: anyhow::Error| e.to_string()));
-        });
+            handles.push(handle);
+        }
+
+        // Wait for all threads to complete
+        for handle in handles {
+            handle.join().map_err(|_| anyhow::anyhow!("Thread panicked"))??;
+        }
+
+        Ok(())
     }
 }
 
