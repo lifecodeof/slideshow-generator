@@ -1,15 +1,17 @@
-use std::path::{Path, PathBuf};
-use crate::utils::{read_files_from_directory, filter_media_files};
 use crate::transitions::BuiltinTransition;
-use anyhow::Result;
+use crate::utils::{filter_media_files, read_files_from_directory};
+use anyhow::{bail, Result};
 use log::{debug, error};
+use std::path::{Path, PathBuf};
+
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
 
 /// Configuration options for slideshow generation
 #[derive(Debug, Clone)]
 pub struct SlideshowOptions {
     pub duration_per_slide: f32,
-    pub output_width: u32,
-    pub output_height: u32,
+    pub output_dimensions: Option<(u32, u32)>,
     pub output_path: PathBuf,
     pub transition: BuiltinTransition,
 }
@@ -18,8 +20,7 @@ impl Default for SlideshowOptions {
     fn default() -> Self {
         Self {
             duration_per_slide: 3.0,
-            output_width: 1920,
-            output_height: 1080,
+            output_dimensions: None,
             output_path: PathBuf::from("slideshow.mp4"),
             transition: BuiltinTransition::None,
         }
@@ -40,9 +41,24 @@ impl SlideshowOptions {
 
     /// Set the output resolution
     pub fn with_output_resolution(mut self, width: u32, height: u32) -> Self {
-        self.output_width = width;
-        self.output_height = height;
+        self.output_dimensions = Some((width, height));
         self
+    }
+
+    /// Set the output dimensions (alias for with_output_resolution)
+    pub fn with_output_dimensions(mut self, dimensions: Option<(u32, u32)>) -> Self {
+        self.output_dimensions = dimensions;
+        self
+    }
+
+    /// Get the output width (for backward compatibility)
+    pub fn output_width(&self) -> u32 {
+        self.output_dimensions.unwrap_or((1920, 1080)).0
+    }
+
+    /// Get the output height (for backward compatibility)
+    pub fn output_height(&self) -> u32 {
+        self.output_dimensions.unwrap_or((1920, 1080)).1
     }
 
     /// Set the output path
@@ -102,26 +118,42 @@ impl SlideshowGenerator {
     pub fn load_directory<P: AsRef<Path>>(&mut self, input_dir: P) -> Result<()> {
         let files = read_files_from_directory(input_dir.as_ref().to_str().unwrap())?;
         let media_files = filter_media_files(files);
-        
+
         for file in media_files {
+            // Skip the output file if it's in the same directory
+            if {
+                // Try to compare canonical paths first
+                if let (Ok(file_canonical), Ok(output_canonical)) =
+                    (file.canonicalize(), self.options.output_path.canonicalize())
+                {
+                    file_canonical == output_canonical
+                } else {
+                    // Fall back to filename comparison if canonicalization fails
+                    file.file_name() == self.options.output_path.file_name()
+                        && file.file_name().is_some()
+                }
+            } {
+                continue;
+            }
+
             if let Some(extension) = file.extension() {
                 let ext = extension.to_string_lossy().to_lowercase();
                 match ext.as_str() {
                     "jpg" | "jpeg" | "png" | "gif" | "bmp" | "tiff" => {
                         self.images.push(file);
-                    },
+                    }
                     "mp4" | "mov" | "avi" | "mkv" | "webm" => {
                         self.videos.push(file);
-                    },
+                    }
                     _ => {}
                 }
             }
         }
-        
+
         // Sort files by name for consistent ordering
         self.images.sort();
         self.videos.sort();
-        
+
         Ok(())
     }
 
@@ -135,35 +167,63 @@ impl SlideshowGenerator {
         self.videos.push(video_path.as_ref().to_path_buf());
     }
 
-    /// Get the current slideshow options
-    pub fn options(&self) -> &SlideshowOptions {
-        &self.options
+    /// Get the output dimensions, using the first image's dimensions if not specified
+    pub fn get_output_dimensions(&self) -> Result<(u32, u32)> {
+        if let Some(dimensions) = self.options.output_dimensions {
+            Ok(dimensions)
+        } else {
+            // Get dimensions from the first image
+            if let Some(first_image) = self.images.first() {
+                let image = crate::media::Image::new(first_image.clone());
+                image.dimensions()
+            } else if let Some(_first_video) = self.videos.first() {
+                bail!("Output dimensions must be specified when only videos are present");
+            } else {
+                bail!("No media files available to determine output dimensions");
+            }
+        }
     }
-
-    /// Update slideshow options
     pub fn set_options(&mut self, options: SlideshowOptions) {
         self.options = options;
     }
 
+    /// Get the current options
+    pub fn options(&self) -> &SlideshowOptions {
+        &self.options
+    }
+
     /// Generate transition filters for multiple inputs
-    fn generate_transition_filters(&self, input_labels: &[String]) -> String {
+    fn generate_transition_filters(&self, input_labels: &[String]) -> Result<String> {
         use crate::transitions::SlideshowTransition;
-        
+
         match &self.options.transition {
             BuiltinTransition::None => {
                 // Simple concatenation without transitions
-                format!("{}concat=n={}:v=1:a=0[outv]", input_labels.join(""), input_labels.len())
-            },
+                Ok(format!(
+                    "{}concat=n={}:v=1:a=0[outv]",
+                    input_labels.join(""),
+                    input_labels.len()
+                ))
+            }
             transition => {
                 // Apply transitions between consecutive slides
                 if input_labels.len() < 2 {
                     // Single input - just pass through
-                    format!("{}scale={}:{}[outv]", input_labels[0], self.options.output_width, self.options.output_height)
+                    let (width, height) = self.get_output_dimensions()?;
+                    Ok(format!(
+                        "{}scale={}:{}[outv]",
+                        input_labels[0], width, height
+                    ))
                 } else if input_labels.len() == 2 {
                     // Two inputs - simple xfade (proven to work)
                     let transition_duration = transition.duration();
                     let offset = (self.options.duration_per_slide - transition_duration).max(0.0);
-                    transition.to_ffmpeg_filter(&input_labels[0], &input_labels[1], "[outv]", offset)
+                    Ok(transition.to_ffmpeg_filter(
+                        &input_labels[0],
+                        &input_labels[1],
+                        "[outv]",
+                        offset,
+                    ))
                 } else {
                     // Multiple inputs: Use practical approach for common case (5 images + 1 video)
                     self.generate_practical_multi_transitions(input_labels, transition)
@@ -174,27 +234,35 @@ impl SlideshowGenerator {
 
     /// Generate transitions for the common case: multiple images + optional video  
     /// Strategy: Build timeline segments with transitions to achieve exact mathematical timing
-    fn generate_practical_multi_transitions(&self, input_labels: &[String], transition: &BuiltinTransition) -> String {
+    fn generate_practical_multi_transitions(
+        &self,
+        input_labels: &[String],
+        transition: &BuiltinTransition,
+    ) -> Result<String> {
         use crate::transitions::SlideshowTransition;
-        
+
         // Separate images from videos based on our processing order
         let num_images = self.images.len();
         let image_labels = &input_labels[..num_images];
         let video_labels = &input_labels[num_images..];
-        
+
         if image_labels.len() < 2 {
             // No transitions possible
-            return format!("{}concat=n={}:v=1:a=0[outv]", input_labels.join(""), input_labels.len());
+            return Ok(format!(
+                "{}concat=n={}:v=1:a=0[outv]",
+                input_labels.join(""),
+                input_labels.len()
+            ));
         }
-        
+
         let transition_duration = transition.duration();
-        
+
         // Use chained xfade approach - this creates smooth transitions without duplication
         // Each xfade overlaps the end of one clip with the beginning of the next
-        
+
         let mut current_label = image_labels[0].clone();
         let mut filter_parts = Vec::new();
-        
+
         // Apply transitions between consecutive images
         for i in 1..image_labels.len() {
             let next_label = image_labels[i].clone();
@@ -203,7 +271,7 @@ impl SlideshowGenerator {
             } else {
                 format!("[temp{}]", i)
             };
-            
+
             // For smooth transitions without duplication:
             // offset should be: (total_duration_so_far - transition_duration)
             // This makes the transition start near the end of the accumulated timeline
@@ -213,20 +281,21 @@ impl SlideshowGenerator {
             } else {
                 // Subsequent transitions: account for previous transitions
                 // Each previous transition reduces total duration by transition_duration
-                let accumulated_duration = (i as f32) * self.options.duration_per_slide - ((i - 1) as f32) * transition_duration;
+                let accumulated_duration = (i as f32) * self.options.duration_per_slide
+                    - ((i - 1) as f32) * transition_duration;
                 accumulated_duration - transition_duration
             };
-            
+
             let transition_filter = transition.to_ffmpeg_filter(
                 &current_label,
-                &next_label, 
+                &next_label,
                 &result_label,
-                offset.max(0.0)
+                offset.max(0.0),
             );
             filter_parts.push(transition_filter);
             current_label = result_label;
         }
-        
+
         // Handle video concatenation
         if video_labels.is_empty() {
             // No videos - rename final result
@@ -243,15 +312,15 @@ impl SlideshowGenerator {
             // Concatenate with videos
             let mut final_inputs = vec!["[images_result]".to_string()];
             final_inputs.extend(video_labels.iter().cloned());
-            
+
             filter_parts.push(format!(
                 "{}concat=n={}:v=1:a=0[outv]",
                 final_inputs.join(""),
                 final_inputs.len()
             ));
         }
-        
-        filter_parts.join(";")
+
+        Ok(filter_parts.join(";"))
     }
 
     /// Get the number of images in the slideshow
@@ -276,21 +345,34 @@ impl SlideshowGenerator {
 
     /// Generate the slideshow video (legacy method for backward compatibility)
     pub fn generate_slideshow<P: AsRef<Path>>(&self, output_path: P) -> Result<()> {
-        debug!("Generating slideshow with {} images and {} videos", self.images.len(), self.videos.len());
-        
+        debug!(
+            "Generating slideshow with {} images and {} videos",
+            self.images.len(),
+            self.videos.len()
+        );
+
         if self.images.is_empty() && self.videos.is_empty() {
             anyhow::bail!("No media files found to create slideshow");
         }
 
-        // Check if FFmpeg is available
-        let ffmpeg_check = std::process::Command::new("ffmpeg")
-            .arg("-version")
-            .output();
+        // Get output dimensions
+        let (output_width, output_height) = self.get_output_dimensions()?;
+        debug!(
+            "Using output dimensions: {}x{}",
+            output_width, output_height
+        );
 
-        match ffmpeg_check {
+        // Check if FFmpeg is available
+        let mut ffmpeg_check_cmd = std::process::Command::new("ffmpeg");
+        ffmpeg_check_cmd.arg("-version");
+
+        #[cfg(windows)]
+        ffmpeg_check_cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+
+        match ffmpeg_check_cmd.output() {
             Ok(output) if output.status.success() => {
                 debug!("FFmpeg found, proceeding with video generation...");
-            },
+            }
             _ => {
                 anyhow::bail!("FFmpeg not found. Please install FFmpeg and add it to your PATH.");
             }
@@ -303,7 +385,7 @@ impl SlideshowGenerator {
         for (i, _image_path) in self.images.iter().enumerate() {
             filter_parts.push(format!(
                 "[{}:v]scale={}:{}:force_original_aspect_ratio=decrease,pad={}:{}:(ow-iw)/2:(oh-ih)/2,setpts=PTS-STARTPTS,fps=30[img{}]", 
-                i, self.options.output_width, self.options.output_height, self.options.output_width, self.options.output_height, i
+                i, output_width, output_height, output_width, output_height, i
             ));
         }
 
@@ -312,7 +394,7 @@ impl SlideshowGenerator {
             let input_idx = self.images.len() + i;
             filter_parts.push(format!(
                 "[{}:v]scale={}:{}:force_original_aspect_ratio=decrease,pad={}:{}:(ow-iw)/2:(oh-ih)/2,fps=30,setpts=PTS-STARTPTS[vid{}]", 
-                input_idx, self.options.output_width, self.options.output_height, self.options.output_width, self.options.output_height, i
+                input_idx, output_width, output_height, output_width, output_height, i
             ));
         }
 
@@ -330,10 +412,10 @@ impl SlideshowGenerator {
             // Single input or no inputs - just pass through
             let default_input = "[0:v]".to_string();
             let input = input_labels.first().unwrap_or(&default_input);
-            format!("{}scale={}:{}[outv]", input, self.options.output_width, self.options.output_height)
+            format!("{}scale={}:{}[outv]", input, output_width, output_height)
         } else {
             // Multiple inputs - apply transitions or concatenation
-            self.generate_transition_filters(&input_labels)
+            self.generate_transition_filters(&input_labels)?
         };
 
         filter_parts.push(filter_result);
@@ -344,24 +426,35 @@ impl SlideshowGenerator {
         let mut cmd = std::process::Command::new("ffmpeg");
         cmd.arg("-y"); // Overwrite output file
 
+        #[cfg(windows)]
+        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+
         // Add input files
         for image_path in &self.images {
-            cmd.arg("-loop").arg("1")
-               .arg("-t").arg(self.options.duration_per_slide.to_string())
-               .arg("-i").arg(image_path);
+            cmd.arg("-loop")
+                .arg("1")
+                .arg("-t")
+                .arg(self.options.duration_per_slide.to_string())
+                .arg("-i")
+                .arg(image_path);
         }
-        
+
         for video_path in &self.videos {
             cmd.arg("-i").arg(video_path);
         }
 
         // Add filter and output
-        cmd.arg("-filter_complex").arg(&filter_complex)
-           .arg("-map").arg("[outv]")
-           .arg("-c:v").arg("libx264")
-           .arg("-pix_fmt").arg("yuv420p")
-           .arg("-r").arg("30")
-           .arg(output_path.as_ref());
+        cmd.arg("-filter_complex")
+            .arg(&filter_complex)
+            .arg("-map")
+            .arg("[outv]")
+            .arg("-c:v")
+            .arg("libx264")
+            .arg("-pix_fmt")
+            .arg("yuv420p")
+            .arg("-r")
+            .arg("30")
+            .arg(output_path.as_ref());
 
         debug!("Running FFmpeg with Command: {:?}", cmd);
 
@@ -373,7 +466,10 @@ impl SlideshowGenerator {
             anyhow::bail!("FFmpeg failed: {}", stderr);
         }
 
-        debug!("Slideshow generated successfully: {}", output_path.as_ref().display());
+        debug!(
+            "Slideshow generated successfully: {}",
+            output_path.as_ref().display()
+        );
         Ok(())
     }
 }

@@ -1,6 +1,10 @@
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 use eframe::egui;
 use rfd::FileDialog;
-use slideshow_generator::{SlideshowGenerator, SlideshowOptions, BuiltinTransition, SlideDirection, WipeDirection};
+use slideshow_generator::{
+    BuiltinTransition, SlideDirection, SlideshowGenerator, SlideshowOptions, WipeDirection,
+};
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
@@ -48,6 +52,7 @@ struct SlideshowApp {
     input_dir: Option<PathBuf>,
     output_path: Option<PathBuf>,
     duration_per_slide: f32,
+    use_custom_dimensions: bool,
     width: u32,
     height: u32,
     transition: TransitionType,
@@ -65,6 +70,7 @@ impl Default for SlideshowApp {
             input_dir: None,
             output_path: None,
             duration_per_slide: 3.0,
+            use_custom_dimensions: false,
             width: 1920,
             height: 1080,
             transition: TransitionType::None,
@@ -99,7 +105,14 @@ impl eframe::App for SlideshowApp {
                 if ui.button("Select Folder").clicked() {
                     if let Some(path) = FileDialog::new().pick_folder() {
                         self.input_dir = Some(path.clone());
-                        self.status = format!("Selected input: {}", path.display());
+                        // Auto-set output path to input_dir/slideshow.mp4
+                        let output_path = path.join("slideshow.mp4");
+                        self.output_path = Some(output_path.clone());
+                        self.status = format!(
+                            "Selected input: {}\nOutput will be: {}",
+                            path.display(),
+                            output_path.display()
+                        );
                     }
                 }
             });
@@ -114,10 +127,16 @@ impl eframe::App for SlideshowApp {
             ui.horizontal(|ui| {
                 ui.label("Output File:");
                 if ui.button("Select Save Location").clicked() {
-                    if let Some(path) = FileDialog::new()
+                    let mut dialog = FileDialog::new()
                         .add_filter("MP4 Video", &["mp4"])
-                        .set_file_name("slideshow.mp4")
-                        .save_file() {
+                        .set_file_name("slideshow.mp4");
+
+                    // If input directory is selected, start from there
+                    if let Some(ref input_dir) = self.input_dir {
+                        dialog = dialog.set_directory(input_dir);
+                    }
+
+                    if let Some(path) = dialog.save_file() {
                         self.output_path = Some(path.clone());
                         self.status = format!("Selected output: {}", path.display());
                     }
@@ -136,13 +155,20 @@ impl eframe::App for SlideshowApp {
                 ui.add(egui::DragValue::new(&mut self.duration_per_slide).clamp_range(0.5..=10.0));
             });
 
-            // Resolution
-            ui.horizontal(|ui| {
-                ui.label("Resolution:");
-                ui.add(egui::DragValue::new(&mut self.width).clamp_range(640..=3840));
-                ui.label("x");
-                ui.add(egui::DragValue::new(&mut self.height).clamp_range(480..=2160));
-            });
+            // Custom dimensions checkbox
+            ui.checkbox(&mut self.use_custom_dimensions, "Use custom resolution");
+
+            // Resolution (only shown if custom dimensions is enabled)
+            if self.use_custom_dimensions {
+                ui.horizontal(|ui| {
+                    ui.label("Resolution:");
+                    ui.add(egui::DragValue::new(&mut self.width).clamp_range(640..=3840));
+                    ui.label("x");
+                    ui.add(egui::DragValue::new(&mut self.height).clamp_range(480..=2160));
+                });
+            } else {
+                ui.label("Resolution: Auto (from first image)");
+            }
 
             ui.separator();
 
@@ -154,37 +180,124 @@ impl eframe::App for SlideshowApp {
                     ui.selectable_value(&mut self.transition, TransitionType::None, "None");
                     ui.selectable_value(&mut self.transition, TransitionType::Fade, "Fade");
                     ui.selectable_value(&mut self.transition, TransitionType::Dissolve, "Dissolve");
-                    ui.selectable_value(&mut self.transition, TransitionType::Slide(SlideDirection::Left), "Slide Left");
-                    ui.selectable_value(&mut self.transition, TransitionType::Slide(SlideDirection::Right), "Slide Right");
-                    ui.selectable_value(&mut self.transition, TransitionType::Slide(SlideDirection::Up), "Slide Up");
-                    ui.selectable_value(&mut self.transition, TransitionType::Slide(SlideDirection::Down), "Slide Down");
-                    ui.selectable_value(&mut self.transition, TransitionType::Wipe(WipeDirection::Left), "Wipe Left");
-                    ui.selectable_value(&mut self.transition, TransitionType::Wipe(WipeDirection::Right), "Wipe Right");
-                    ui.selectable_value(&mut self.transition, TransitionType::Wipe(WipeDirection::Up), "Wipe Up");
-                    ui.selectable_value(&mut self.transition, TransitionType::Wipe(WipeDirection::Down), "Wipe Down");
-                    ui.selectable_value(&mut self.transition, TransitionType::Wipe(WipeDirection::DiagonalTL), "Wipe Diagonal TL-BR");
-                    ui.selectable_value(&mut self.transition, TransitionType::Wipe(WipeDirection::DiagonalTR), "Wipe Diagonal TR-BL");
+                    ui.selectable_value(
+                        &mut self.transition,
+                        TransitionType::Slide(SlideDirection::Left),
+                        "Slide Left",
+                    );
+                    ui.selectable_value(
+                        &mut self.transition,
+                        TransitionType::Slide(SlideDirection::Right),
+                        "Slide Right",
+                    );
+                    ui.selectable_value(
+                        &mut self.transition,
+                        TransitionType::Slide(SlideDirection::Up),
+                        "Slide Up",
+                    );
+                    ui.selectable_value(
+                        &mut self.transition,
+                        TransitionType::Slide(SlideDirection::Down),
+                        "Slide Down",
+                    );
+                    ui.selectable_value(
+                        &mut self.transition,
+                        TransitionType::Wipe(WipeDirection::Left),
+                        "Wipe Left",
+                    );
+                    ui.selectable_value(
+                        &mut self.transition,
+                        TransitionType::Wipe(WipeDirection::Right),
+                        "Wipe Right",
+                    );
+                    ui.selectable_value(
+                        &mut self.transition,
+                        TransitionType::Wipe(WipeDirection::Up),
+                        "Wipe Up",
+                    );
+                    ui.selectable_value(
+                        &mut self.transition,
+                        TransitionType::Wipe(WipeDirection::Down),
+                        "Wipe Down",
+                    );
+                    ui.selectable_value(
+                        &mut self.transition,
+                        TransitionType::Wipe(WipeDirection::DiagonalTL),
+                        "Wipe Diagonal TL-BR",
+                    );
+                    ui.selectable_value(
+                        &mut self.transition,
+                        TransitionType::Wipe(WipeDirection::DiagonalTR),
+                        "Wipe Diagonal TR-BL",
+                    );
                 });
 
             if !matches!(self.transition, TransitionType::None) {
                 ui.horizontal(|ui| {
                     ui.label("Transition duration (seconds):");
-                    ui.add(egui::DragValue::new(&mut self.transition_duration).clamp_range(0.1..=5.0));
+                    ui.add(
+                        egui::DragValue::new(&mut self.transition_duration).clamp_range(0.1..=5.0),
+                    );
                 });
             }
 
             ui.separator();
 
             // Generate button
-            let can_generate = self.input_dir.is_some() && self.output_path.is_some() && !self.generating;
-            if ui.add_enabled(can_generate, egui::Button::new("Generate Slideshow")).clicked() {
+            let can_generate =
+                self.input_dir.is_some() && self.output_path.is_some() && !self.generating;
+            let button_text = if self.generating {
+                "Generating..."
+            } else {
+                "Generate Slideshow"
+            };
+            let button = egui::Button::new(
+                egui::RichText::new(button_text)
+                    .color(egui::Color32::WHITE)
+                    .size(16.0),
+            )
+            .fill(if can_generate {
+                egui::Color32::from_rgb(0, 123, 255)
+            } else {
+                egui::Color32::GRAY
+            })
+            .stroke(egui::Stroke::new(
+                2.0,
+                if can_generate {
+                    egui::Color32::from_rgb(0, 100, 200)
+                } else {
+                    egui::Color32::DARK_GRAY
+                },
+            ))
+            .rounding(6.0)
+            .min_size(egui::Vec2::new(200.0, 40.0));
+
+            if ui.add_enabled(can_generate, button).clicked() {
                 self.generate_slideshow();
             }
 
             ui.separator();
 
-            // Status
-            ui.label(&self.status);
+            // Status with scrollbar filling remaining space
+            ui.label("Status:");
+            let available_rect = ui.available_rect_before_wrap();
+            let desired_height = available_rect.height();
+
+            egui::ScrollArea::vertical()
+                .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::VisibleWhenNeeded)
+                .auto_shrink([false, false])
+                .drag_to_scroll(false)
+                .show(ui, |ui| {
+                    // Make the text edit take full width and desired height
+                    let mut status_text = self.status.clone();
+                    let text_edit = egui::TextEdit::multiline(&mut status_text)
+                        .desired_width(f32::INFINITY)
+                        .desired_rows(
+                            (desired_height / ui.text_style_height(&egui::TextStyle::Body)).floor()
+                                as usize,
+                        );
+                    ui.add(text_edit);
+                });
         });
     }
 }
@@ -194,8 +307,11 @@ impl SlideshowApp {
         let input_dir = self.input_dir.clone().unwrap();
         let output_path = self.output_path.clone().unwrap();
         let duration_per_slide = self.duration_per_slide;
-        let width = self.width;
-        let height = self.height;
+        let dimensions = if self.use_custom_dimensions {
+            Some((self.width, self.height))
+        } else {
+            None
+        };
         let transition = self.transition.to_builtin(self.transition_duration);
         let tx = self.tx.clone();
 
@@ -204,10 +320,13 @@ impl SlideshowApp {
 
         thread::spawn(move || {
             let result = (|| {
-                let options = SlideshowOptions::new()
+                let mut options = SlideshowOptions::new()
                     .with_duration_per_slide(duration_per_slide)
-                    .with_output_resolution(width, height)
                     .with_transition(transition);
+
+                if let Some((width, height)) = dimensions {
+                    options = options.with_output_resolution(width, height);
+                }
 
                 let generator = SlideshowGenerator::from_directory(input_dir, options)?;
                 generator.generate(output_path)?;
