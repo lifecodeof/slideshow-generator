@@ -11,6 +11,7 @@ use std::thread;
 
 #[derive(Clone, PartialEq)]
 enum TransitionType {
+    Triplet,
     Every,
     None,
     Fade,
@@ -22,7 +23,8 @@ enum TransitionType {
 impl TransitionType {
     fn to_builtin(&self, duration: f32) -> BuiltinTransition {
         match self {
-            TransitionType::Every => BuiltinTransition::None, // This won't be used for Every
+            TransitionType::Triplet => BuiltinTransition::None, // This won't be used for Triplet
+            TransitionType::Every => BuiltinTransition::None,   // This won't be used for Every
             TransitionType::None => BuiltinTransition::None,
             TransitionType::Fade => BuiltinTransition::fade(duration),
             TransitionType::Dissolve => BuiltinTransition::dissolve(duration),
@@ -33,6 +35,7 @@ impl TransitionType {
 
     fn name(&self) -> &str {
         match self {
+            TransitionType::Triplet => "Triplet",
             TransitionType::Every => "Every",
             TransitionType::None => "None",
             TransitionType::Fade => "Fade",
@@ -76,7 +79,7 @@ impl Default for SlideshowApp {
             use_custom_dimensions: false,
             width: 1920,
             height: 1080,
-            transition: TransitionType::Every,
+            transition: TransitionType::Triplet,
             transition_duration: 0.5,
             status: "Ready".to_string(),
             generating: false,
@@ -105,7 +108,24 @@ impl eframe::App for SlideshowApp {
             // Input directory selection
             ui.horizontal(|ui| {
                 ui.label("Input Directory:");
-                if ui.button("Select Folder").clicked() {
+                let folder_selected = self.input_dir.is_some();
+                let mut select_folder_button = egui::Button::new(
+                    egui::RichText::new("Select Folder").color(egui::Color32::WHITE),
+                )
+                .rounding(4.0);
+
+                // Only apply custom styling when no folder is selected
+                if !folder_selected {
+                    select_folder_button = select_folder_button
+                        .fill(egui::Color32::from_rgb(34, 139, 34)) // Green when no folder selected
+                        .stroke(egui::Stroke::new(
+                            1.5,
+                            egui::Color32::from_rgb(0, 100, 0), // Dark green border
+                        ))
+                        .min_size(egui::Vec2::new(120.0, 30.0));
+                }
+
+                if ui.add(select_folder_button).clicked() {
                     if let Some(path) = FileDialog::new().pick_folder() {
                         self.input_dir = Some(path.clone());
                         // Auto-set output path to input_dir/slideshow.mp4
@@ -180,6 +200,7 @@ impl eframe::App for SlideshowApp {
             egui::ComboBox::from_label("")
                 .selected_text(self.transition.name())
                 .show_ui(ui, |ui| {
+                    ui.selectable_value(&mut self.transition, TransitionType::Triplet, "Triplet");
                     ui.selectable_value(&mut self.transition, TransitionType::Every, "Every");
                     ui.selectable_value(&mut self.transition, TransitionType::None, "None");
                     ui.selectable_value(&mut self.transition, TransitionType::Fade, "Fade");
@@ -236,7 +257,10 @@ impl eframe::App for SlideshowApp {
                     );
                 });
 
-            if !matches!(self.transition, TransitionType::None | TransitionType::Every) {
+            if !matches!(
+                self.transition,
+                TransitionType::None | TransitionType::Every
+            ) {
                 ui.horizontal(|ui| {
                     ui.label("Transition duration (seconds):");
                     ui.add(
@@ -326,6 +350,16 @@ impl SlideshowApp {
         thread::spawn(move || {
             let result = (|| {
                 match transition {
+                    TransitionType::Triplet => {
+                        // Generate triplet transitions in parallel
+                        Self::generate_triplet_transitions(
+                            input_dir,
+                            output_path,
+                            duration_per_slide,
+                            dimensions,
+                            transition_duration,
+                        )
+                    }
                     TransitionType::Every => {
                         // Generate all transitions in parallel
                         Self::generate_all_transitions(
@@ -378,8 +412,14 @@ impl SlideshowApp {
             (TransitionType::Wipe(WipeDirection::Right), "wipe-right"),
             (TransitionType::Wipe(WipeDirection::Up), "wipe-up"),
             (TransitionType::Wipe(WipeDirection::Down), "wipe-down"),
-            (TransitionType::Wipe(WipeDirection::DiagonalTL), "wipe-diagonal-tl-br"),
-            (TransitionType::Wipe(WipeDirection::DiagonalTR), "wipe-diagonal-tr-bl"),
+            (
+                TransitionType::Wipe(WipeDirection::DiagonalTL),
+                "wipe-diagonal-tl-br",
+            ),
+            (
+                TransitionType::Wipe(WipeDirection::DiagonalTR),
+                "wipe-diagonal-tr-bl",
+            ),
         ];
 
         // Create output directory if it doesn't exist
@@ -435,7 +475,78 @@ impl SlideshowApp {
 
         // Wait for all threads to complete
         for handle in handles {
-            handle.join().map_err(|_| anyhow::anyhow!("Thread panicked"))??;
+            handle
+                .join()
+                .map_err(|_| anyhow::anyhow!("Thread panicked"))??;
+        }
+
+        Ok(())
+    }
+
+    fn generate_triplet_transitions(
+        input_dir: PathBuf,
+        base_output_path: PathBuf,
+        duration_per_slide: f32,
+        dimensions: Option<(u32, u32)>,
+        transition_duration: f32,
+    ) -> Result<(), anyhow::Error> {
+        // Define the three triplet transitions
+        let transitions = vec![
+            (TransitionType::Fade, "1"),
+            (TransitionType::Slide(SlideDirection::Right), "2"),
+            (TransitionType::Wipe(WipeDirection::DiagonalTR), "3"),
+        ];
+
+        // Create output directory if it doesn't exist
+        if let Some(parent) = base_output_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+
+        // Generate base filename without extension
+        let base_name = base_output_path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("slideshow");
+        let extension = base_output_path
+            .extension()
+            .and_then(|s| s.to_str())
+            .unwrap_or("mp4");
+
+        // Spawn threads for parallel generation
+        let mut handles: Vec<thread::JoinHandle<Result<(), anyhow::Error>>> = vec![];
+
+        for (transition_type, suffix) in transitions {
+            let input_dir = input_dir.clone();
+            let dimensions = dimensions;
+            let duration_per_slide = duration_per_slide;
+            let transition_duration = transition_duration;
+
+            let output_path =
+                base_output_path.with_file_name(format!("{}.{}.{}", base_name, suffix, extension));
+
+            let handle = thread::spawn(move || {
+                let builtin_transition = transition_type.to_builtin(transition_duration);
+                let mut options = SlideshowOptions::new()
+                    .with_duration_per_slide(duration_per_slide)
+                    .with_transition(builtin_transition);
+
+                if let Some((width, height)) = dimensions {
+                    options = options.with_output_resolution(width, height);
+                }
+
+                let generator = SlideshowGenerator::from_directory(input_dir, options)?;
+                generator.generate(output_path)?;
+                Ok(())
+            });
+
+            handles.push(handle);
+        }
+
+        // Wait for all threads to complete
+        for handle in handles {
+            handle
+                .join()
+                .map_err(|_| anyhow::anyhow!("Thread panicked"))??;
         }
 
         Ok(())
