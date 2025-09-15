@@ -1,14 +1,26 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use clap::Parser;
 use eframe::egui;
 use rfd::FileDialog;
 use slideshow_generator::{
     BuiltinTransition, SlideDirection, SlideshowGenerator, SlideshowOptions, WipeDirection,
 };
-use std::env;
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
+
+#[derive(Parser)]
+#[command(name = "slideshow-generator-gui")]
+#[command(about = "GUI for generating slideshow videos")]
+struct Cli {
+    /// Input directory containing images/videos
+    input_dir: Option<PathBuf>,
+
+    /// Default transition type
+    #[arg(short = 't', long)]
+    transition: Option<String>,
+}
 
 #[derive(Clone, PartialEq)]
 enum TransitionType {
@@ -51,6 +63,29 @@ impl TransitionType {
             TransitionType::Wipe(WipeDirection::Down) => "Wipe Down",
             TransitionType::Wipe(WipeDirection::DiagonalTL) => "Wipe Diagonal TL-BR",
             TransitionType::Wipe(WipeDirection::DiagonalTR) => "Wipe Diagonal TR-BL",
+        }
+    }
+}
+
+impl TransitionType {
+    fn from_str(s: &str) -> Option<Self> {
+        match s.to_lowercase().as_str() {
+            "triplet" => Some(TransitionType::Triplet),
+            "every" => Some(TransitionType::Every),
+            "none" => Some(TransitionType::None),
+            "fade" => Some(TransitionType::Fade),
+            "dissolve" => Some(TransitionType::Dissolve),
+            "slide-left" => Some(TransitionType::Slide(SlideDirection::Left)),
+            "slide-right" => Some(TransitionType::Slide(SlideDirection::Right)),
+            "slide-up" => Some(TransitionType::Slide(SlideDirection::Up)),
+            "slide-down" => Some(TransitionType::Slide(SlideDirection::Down)),
+            "wipe-left" => Some(TransitionType::Wipe(WipeDirection::Left)),
+            "wipe-right" => Some(TransitionType::Wipe(WipeDirection::Right)),
+            "wipe-up" => Some(TransitionType::Wipe(WipeDirection::Up)),
+            "wipe-down" => Some(TransitionType::Wipe(WipeDirection::Down)),
+            "wipe-diagonal-tl-br" => Some(TransitionType::Wipe(WipeDirection::DiagonalTL)),
+            "wipe-diagonal-tr-bl" => Some(TransitionType::Wipe(WipeDirection::DiagonalTR)),
+            _ => None,
         }
     }
 }
@@ -340,14 +375,13 @@ impl SlideshowApp {
         let output_path = folder_path.join("slideshow.mp4");
         self.output_path = Some(output_path.clone());
 
-        // Set transition to Triplet
-        self.transition = TransitionType::Triplet;
-
         // Update status
+        let transition_name = self.transition.name();
         self.status = format!(
-            "Auto-started with folder: {}\nOutput will be: {}\nGenerating Triplet transitions...",
+            "Auto-started with folder: {}\nOutput will be: {}\nUsing transition: {}...",
             folder_path.display(),
-            output_path.display()
+            output_path.display(),
+            transition_name
         );
 
         // Start generation automatically
@@ -577,8 +611,7 @@ impl SlideshowApp {
 }
 
 fn main() -> eframe::Result<()> {
-    // Check for command line arguments
-    let args: Vec<String> = env::args().collect();
+    let cli = Cli::parse();
 
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
@@ -590,11 +623,21 @@ fn main() -> eframe::Result<()> {
     // Create the app
     let mut app = SlideshowApp::default();
 
-    // If a folder path is provided as the first argument, set it up automatically
-    if args.len() > 1 {
-        let folder_path = PathBuf::from(&args[1]);
+    // Set default transition from CLI if provided
+    if let Some(transition_str) = cli.transition {
+        if let Some(transition) = TransitionType::from_str(&transition_str) {
+            app.transition = transition;
+        } else {
+            eprintln!("Warning: Unknown transition '{}'. Using default.", transition_str);
+        }
+    }
+
+    // If input directory is provided, set it up automatically
+    if let Some(folder_path) = cli.input_dir {
         if folder_path.is_dir() {
             app.setup_from_command_line(folder_path);
+        } else {
+            eprintln!("Warning: '{}' is not a valid directory.", folder_path.display());
         }
     }
 
