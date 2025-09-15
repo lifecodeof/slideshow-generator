@@ -5,10 +5,10 @@ use rfd::FileDialog;
 use slideshow_generator::{
     BuiltinTransition, SlideDirection, SlideshowGenerator, SlideshowOptions, WipeDirection,
 };
+use std::env;
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
-use std::env;
 
 #[derive(Clone, PartialEq)]
 enum TransitionType {
@@ -335,21 +335,21 @@ impl SlideshowApp {
     fn setup_from_command_line(&mut self, folder_path: PathBuf) {
         // Set the input directory
         self.input_dir = Some(folder_path.clone());
-        
+
         // Auto-set output path to input_dir/slideshow.mp4
         let output_path = folder_path.join("slideshow.mp4");
         self.output_path = Some(output_path.clone());
-        
+
         // Set transition to Triplet
         self.transition = TransitionType::Triplet;
-        
+
         // Update status
         self.status = format!(
             "Auto-started with folder: {}\nOutput will be: {}\nGenerating Triplet transitions...",
             folder_path.display(),
             output_path.display()
         );
-        
+
         // Start generation automatically
         self.generate_slideshow();
     }
@@ -579,7 +579,7 @@ impl SlideshowApp {
 fn main() -> eframe::Result<()> {
     // Check for command line arguments
     let args: Vec<String> = env::args().collect();
-    
+
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([600.0, 500.0])
@@ -589,7 +589,7 @@ fn main() -> eframe::Result<()> {
 
     // Create the app
     let mut app = SlideshowApp::default();
-    
+
     // If a folder path is provided as the first argument, set it up automatically
     if args.len() > 1 {
         let folder_path = PathBuf::from(&args[1]);
