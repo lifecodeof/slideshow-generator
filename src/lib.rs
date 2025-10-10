@@ -8,6 +8,7 @@
 //! - Support for multiple video formats (MP4, MOV, AVI, MKV, WEBM)
 //! - Automatic scaling to 1920x1080 with aspect ratio preservation
 //! - Configurable image display duration
+//! - Configurable resolution coefficient for auto-detected dimensions
 //! - Command-line interface for easy usage
 //!
 //! ## Example
@@ -19,7 +20,8 @@
 //! # fn main() -> anyhow::Result<()> {
 //! let options = SlideshowOptions::new()
 //!     .with_duration_per_slide(3.0)
-//!     .with_output_resolution(1920, 1080);
+//!     .with_output_resolution(1920, 1080)
+//!     .with_resolution_coefficient(0.5);
 //!
 //! let generator = SlideshowGenerator::from_directory("input_folder", options)?;
 //! generator.generate("output.mp4")?;

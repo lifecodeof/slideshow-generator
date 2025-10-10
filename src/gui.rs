@@ -97,6 +97,7 @@ struct SlideshowApp {
     use_custom_dimensions: bool,
     width: u32,
     height: u32,
+    resolution_coefficient: f32,
     transition: TransitionType,
     transition_duration: f32,
     status: String,
@@ -115,6 +116,7 @@ impl Default for SlideshowApp {
             use_custom_dimensions: false,
             width: 1920,
             height: 1080,
+            resolution_coefficient: 1.0,
             transition: TransitionType::Triplet,
             transition_duration: 0.5,
             status: "Ready".to_string(),
@@ -227,6 +229,15 @@ impl eframe::App for SlideshowApp {
                 });
             } else {
                 ui.label("Resolution: Auto (from first image)");
+            }
+
+            // Resolution coefficient (only shown if NOT using custom dimensions)
+            if !self.use_custom_dimensions {
+                ui.horizontal(|ui| {
+                    ui.label("Resolution coefficient:");
+                    ui.add(egui::DragValue::new(&mut self.resolution_coefficient).clamp_range(0.1..=2.0).speed(0.01));
+                    ui.label("(multiplier for auto-detected resolution)");
+                });
             }
 
             ui.separator();
@@ -397,6 +408,7 @@ impl SlideshowApp {
         } else {
             None
         };
+        let resolution_coefficient = self.resolution_coefficient;
         let transition = self.transition.clone();
         let transition_duration = self.transition_duration;
         let tx = self.tx.clone();
@@ -415,6 +427,7 @@ impl SlideshowApp {
                             duration_per_slide,
                             dimensions,
                             transition_duration,
+                            resolution_coefficient,
                         )
                     }
                     TransitionType::Every => {
@@ -425,6 +438,7 @@ impl SlideshowApp {
                             duration_per_slide,
                             dimensions,
                             transition_duration,
+                            resolution_coefficient,
                         )
                     }
                     _ => {
@@ -432,7 +446,8 @@ impl SlideshowApp {
                         let builtin_transition = transition.to_builtin(transition_duration);
                         let mut options = SlideshowOptions::new()
                             .with_duration_per_slide(duration_per_slide)
-                            .with_transition(builtin_transition);
+                            .with_transition(builtin_transition)
+                            .with_resolution_coefficient(resolution_coefficient);
 
                         if let Some((width, height)) = dimensions {
                             options = options.with_output_resolution(width, height);
@@ -455,6 +470,7 @@ impl SlideshowApp {
         duration_per_slide: f32,
         dimensions: Option<(u32, u32)>,
         transition_duration: f32,
+        resolution_coefficient: f32,
     ) -> Result<(), anyhow::Error> {
         // Define all transitions to generate
         let transitions = vec![
@@ -502,6 +518,7 @@ impl SlideshowApp {
             let dimensions = dimensions;
             let duration_per_slide = duration_per_slide;
             let transition_duration = transition_duration;
+            let resolution_coefficient = resolution_coefficient;
 
             let output_path = if suffix == "none" {
                 // For "none", use the base filename without suffix
@@ -516,7 +533,8 @@ impl SlideshowApp {
                 let builtin_transition = transition_type.to_builtin(transition_duration);
                 let mut options = SlideshowOptions::new()
                     .with_duration_per_slide(duration_per_slide)
-                    .with_transition(builtin_transition);
+                    .with_transition(builtin_transition)
+                    .with_resolution_coefficient(resolution_coefficient);
 
                 if let Some((width, height)) = dimensions {
                     options = options.with_output_resolution(width, height);
@@ -546,6 +564,7 @@ impl SlideshowApp {
         duration_per_slide: f32,
         dimensions: Option<(u32, u32)>,
         transition_duration: f32,
+        resolution_coefficient: f32,
     ) -> Result<(), anyhow::Error> {
         // Define the three triplet transitions
         let transitions = vec![
@@ -577,6 +596,7 @@ impl SlideshowApp {
             let dimensions = dimensions;
             let duration_per_slide = duration_per_slide;
             let transition_duration = transition_duration;
+            let resolution_coefficient = resolution_coefficient;
 
             let output_path =
                 base_output_path.with_file_name(format!("{}.{}.{}", base_name, suffix, extension));
@@ -585,7 +605,8 @@ impl SlideshowApp {
                 let builtin_transition = transition_type.to_builtin(transition_duration);
                 let mut options = SlideshowOptions::new()
                     .with_duration_per_slide(duration_per_slide)
-                    .with_transition(builtin_transition);
+                    .with_transition(builtin_transition)
+                    .with_resolution_coefficient(resolution_coefficient);
 
                 if let Some((width, height)) = dimensions {
                     options = options.with_output_resolution(width, height);
@@ -610,7 +631,57 @@ impl SlideshowApp {
     }
 }
 
+fn show_help_dialog() -> eframe::Result<()> {
+    // Get help text from clap
+    let help_text = {
+        use clap::CommandFactory;
+        let mut cmd = Cli::command();
+        cmd.render_long_help().to_string()
+    };
+
+    let options = eframe::NativeOptions {
+        viewport: egui::ViewportBuilder::default()
+            .with_inner_size([600.0, 450.0])
+            .with_title("Slideshow Generator GUI - Help"),
+        ..Default::default()
+    };
+
+    eframe::run_native(
+        "Slideshow Generator GUI - Help",
+        options,
+        Box::new(|_cc| Box::new(HelpApp { help_text })),
+    )
+}
+
+struct HelpApp {
+    help_text: String,
+}
+
+impl eframe::App for HelpApp {
+    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        egui::CentralPanel::default().show(ctx, |ui| {
+            ui.heading("Slideshow Generator GUI - Help");
+
+            ui.separator();
+
+            egui::ScrollArea::vertical().show(ui, |ui| {
+                ui.label(&self.help_text);
+            });
+
+            ui.separator();
+
+            ui.label("Close this window to exit.");
+        });
+    }
+}
+
 fn main() -> eframe::Result<()> {
+    // Check for help flags before parsing CLI
+    let args: Vec<String> = std::env::args().collect();
+    if args.iter().any(|arg| arg == "--help" || arg == "-h") {
+        return show_help_dialog();
+    }
+
     let cli = Cli::parse();
 
     let options = eframe::NativeOptions {

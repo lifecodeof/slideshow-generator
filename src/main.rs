@@ -27,6 +27,14 @@ struct Cli {
     #[arg(short = 'H', long, default_value = "1080")]
     height: u32,
 
+    /// Use auto-detected resolution from first image
+    #[arg(long)]
+    auto_resolution: bool,
+
+    /// Resolution coefficient for auto-detected dimensions (0.0-1.0)
+    #[arg(long, default_value = "1.0")]
+    resolution_coefficient: f32,
+
     /// Transition type between slides
     #[arg(short = 't', long, default_value = "none")]
     transition: String,
@@ -61,11 +69,15 @@ fn main() -> anyhow::Result<()> {
         .map_err(|e| anyhow::anyhow!("Invalid transition '{}': {}", cli.transition, e))?;
 
     // Create slideshow options from CLI arguments
-    let options = SlideshowOptions::new()
+    let mut options = SlideshowOptions::new()
         .with_duration_per_slide(cli.duration_per_slide)
-        .with_output_resolution(cli.width, cli.height)
+        .with_resolution_coefficient(cli.resolution_coefficient)
         .with_output_path(&cli.output)
         .with_transition(transition);
+
+    if !cli.auto_resolution {
+        options = options.with_output_resolution(cli.width, cli.height);
+    }
 
     // Create generator with custom options
     let generator = SlideshowGenerator::from_directory(&cli.input, options)?;

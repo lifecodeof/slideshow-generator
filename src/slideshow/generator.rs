@@ -13,6 +13,7 @@ use std::os::windows::process::CommandExt;
 pub struct SlideshowOptions {
     pub duration_per_slide: f32,
     pub output_dimensions: Option<(u32, u32)>,
+    pub resolution_coefficient: f32,
     pub output_path: PathBuf,
     pub transition: BuiltinTransition,
 }
@@ -22,6 +23,7 @@ impl Default for SlideshowOptions {
         Self {
             duration_per_slide: 3.0,
             output_dimensions: None,
+            resolution_coefficient: 1.0,
             output_path: PathBuf::from("slideshow.mp4"),
             transition: BuiltinTransition::None,
         }
@@ -49,6 +51,12 @@ impl SlideshowOptions {
     /// Set the output dimensions (alias for with_output_resolution)
     pub fn with_output_dimensions(mut self, dimensions: Option<(u32, u32)>) -> Self {
         self.output_dimensions = dimensions;
+        self
+    }
+
+    /// Set the resolution coefficient for auto-detected dimensions
+    pub fn with_resolution_coefficient(mut self, coefficient: f32) -> Self {
+        self.resolution_coefficient = coefficient;
         self
     }
 
@@ -175,7 +183,11 @@ impl SlideshowGenerator {
         } else {
             // Get dimensions from the first image
             if let Some(first_image) = self.images.first() {
-                Ok(image::open(first_image)?.dimensions())
+                let (width, height) = image::open(first_image)?.dimensions();
+                // Apply resolution coefficient
+                let new_width = (width as f32 * self.options.resolution_coefficient) as u32;
+                let new_height = (height as f32 * self.options.resolution_coefficient) as u32;
+                Ok((new_width, new_height))
             } else if let Some(_first_video) = self.videos.first() {
                 bail!("Output dimensions must be specified when only videos are present");
             } else {
