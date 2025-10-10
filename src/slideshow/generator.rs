@@ -1,6 +1,7 @@
 use crate::transitions::BuiltinTransition;
 use crate::utils::{filter_media_files, read_files_from_directory};
 use anyhow::{bail, Result};
+use image::GenericImageView;
 use log::{debug, error};
 use std::path::{Path, PathBuf};
 
@@ -174,8 +175,7 @@ impl SlideshowGenerator {
         } else {
             // Get dimensions from the first image
             if let Some(first_image) = self.images.first() {
-                let image = crate::media::Image::new(first_image.clone());
-                image.dimensions()
+                Ok(image::open(first_image)?.dimensions())
             } else if let Some(_first_video) = self.videos.first() {
                 bail!("Output dimensions must be specified when only videos are present");
             } else {
