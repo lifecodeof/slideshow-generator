@@ -49,15 +49,15 @@ jobs:
         run: |
           mkdir artifacts
           if [ "${{ matrix.os }}" == "windows-latest" ]; then
-            cp target/release/slideshow-generator.exe artifacts/
-            cp target/release/slideshow-generator-gui.exe artifacts/
+            cp target/release/slideshow-generator.exe artifacts/${{ matrix.name }}-slideshow-generator.exe
+            cp target/release/slideshow-generator-gui.exe artifacts/${{ matrix.name }}-slideshow-generator-gui.exe
           else
-            cp target/release/slideshow-generator artifacts/
-            cp target/release/slideshow-generator-gui artifacts/
+            cp target/release/slideshow-generator artifacts/${{ matrix.name }}-slideshow-generator
+            cp target/release/slideshow-generator-gui artifacts/${{ matrix.name }}-slideshow-generator-gui
           fi
           # Copy library file if it exists
           if [ -f target/release/libslideshow_generator.rlib ]; then
-            cp target/release/libslideshow_generator.rlib artifacts/
+            cp target/release/libslideshow_generator.rlib artifacts/${{ matrix.name }}-libslideshow_generator.rlib
           fi
 
       - name: Generate build provenance
