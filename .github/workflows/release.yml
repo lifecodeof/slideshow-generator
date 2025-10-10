@@ -1,0 +1,68 @@
+name: Release
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  build-and-release:
+    name: Build and release for ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            name: linux-x64
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            name: macos-x64
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            name: windows-x64
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Build CLI binary
+        run: cargo build --release --bin slideshow-generator --features cli
+
+      - name: Build GUI binary
+        run: cargo build --release --bin slideshow-generator-gui --features gui
+
+      - name: Build library
+        run: cargo build --release
+
+      - name: Prepare artifacts
+        shell: bash
+        run: |
+          mkdir artifacts
+          if [ "${{ matrix.os }}" == "windows-latest" ]; then
+            cp target/release/slideshow-generator.exe artifacts/
+            cp target/release/slideshow-generator-gui.exe artifacts/
+          else
+            cp target/release/slideshow-generator artifacts/
+            cp target/release/slideshow-generator-gui artifacts/
+          fi
+          # Copy library file if it exists
+          if [ -f target/release/libslideshow_generator.rlib ]; then
+            cp target/release/libslideshow_generator.rlib artifacts/
+          fi
+
+      - name: Generate build provenance
+        uses: actions/attest-build-provenance@v1
+        id: attest
+        with:
+          subject-path: artifacts/*
+
+      - name: Upload artifacts to release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: artifacts/*
+          token: ${{ secrets.GITHUB_TOKEN }}
