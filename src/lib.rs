@@ -29,13 +29,10 @@
 //! # }
 //! ```
 
-pub mod media;
 pub mod slideshow;
 pub mod transitions;
 pub mod utils;
 
-// Re-export the main types for convenience
-pub use media::Video;
 pub use slideshow::{SlideshowGenerator, SlideshowOptions};
 pub use transitions::{BuiltinTransition, SlideDirection, SlideshowTransition, WipeDirection};
 

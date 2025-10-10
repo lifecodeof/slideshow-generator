@@ -1,6 +1,6 @@
 use clap::Parser;
 use log::{error, info};
-use slideshow_generator::{SlideshowGenerator, SlideshowOptions, BuiltinTransition};
+use slideshow_generator::{BuiltinTransition, SlideshowGenerator, SlideshowOptions};
 use std::path::PathBuf;
 
 #[derive(Parser)]
@@ -20,19 +20,47 @@ struct Cli {
     duration_per_slide: f32,
 
     /// Output video width
-    #[arg(short = 'W', long, requires = "height", conflicts_with = "resolution_coefficient")]
+    #[arg(
+        short = 'W',
+        long,
+        requires = "height",
+        conflicts_with = "resolution_coefficient"
+    )]
     width: Option<u32>,
 
     /// Output video height
-    #[arg(short = 'H', long, requires = "width", conflicts_with = "resolution_coefficient")]
+    #[arg(
+        short = 'H',
+        long,
+        requires = "width",
+        conflicts_with = "resolution_coefficient"
+    )]
     height: Option<u32>,
 
     /// Resolution coefficient for auto-detected dimensions (0.0-1.0)
     #[arg(long, conflicts_with_all = ["width", "height"])]
     resolution_coefficient: Option<f32>,
 
-    /// Transition type between slides
-    #[arg(short = 't', long, default_value = "none")]
+    #[arg(
+        short = 't',
+        long,
+        default_value = "none",
+        help = r#"
+Transition type between slides
+
+Examples:
+  --transition fade
+  --transition fade:2.5
+  --transition slide-left:1.2
+  --transition wipe-diagonal-tl
+
+Available transitions:
+  none, fade, dissolve,
+  slide-left, slide-right, slide-up, slide-down,
+  wipe-left, wipe-right, wipe-up, wipe-down,
+  wipe-diagonal-tl, wipe-diagonal-tr
+    "#
+    )]
     transition: String,
 
     /// Enable verbose logging
@@ -61,7 +89,9 @@ fn main() -> anyhow::Result<()> {
     info!("Loading media files from: {}", cli.input.display());
 
     // Parse transition from string
-    let transition = cli.transition.parse::<BuiltinTransition>()
+    let transition = cli
+        .transition
+        .parse::<BuiltinTransition>()
         .map_err(|e| anyhow::anyhow!("Invalid transition '{}': {}", cli.transition, e))?;
 
     // Create slideshow options from CLI arguments
