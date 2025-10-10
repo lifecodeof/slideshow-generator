@@ -7,8 +7,8 @@ description = "A Rust library and CLI tool for generating slideshow videos from 
 license = "MIT OR Apache-2.0"
 readme = "README.md"
 repository = "https://github.com/lifecodeof/slideshow-generator"
-keywords = ["video", "slideshow", "ffmpeg", "images", "multimedia"]
-categories = ["multimedia", "command-line-utilities"]
+keywords = ["slideshow", "ffmpeg", "cli", "gui", "library"]
+categories = ["multimedia", "command-line-utilities", "gui"]
 
 # Library configuration
 [lib]

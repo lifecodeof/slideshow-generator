@@ -1,6 +1,6 @@
 # Slideshow Generator
 
-A Rust library and CLI tool for generating slideshow videos from images and
+A Rust library/cli/gui and CLI tool for generating slideshow videos from images and
 videos using FFmpeg.
 
 ## Features
