@@ -2,13 +2,47 @@
 
 use clap::Parser;
 use eframe::egui;
+use log::{Level, LevelFilter, Log, Metadata, Record};
 use rfd::FileDialog;
 use slideshow_generator::{
     BuiltinTransition, SlideDirection, SlideshowGenerator, SlideshowOptions, WipeDirection,
 };
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::{Arc, Mutex};
 use std::thread;
+
+struct GuiLogger {
+    buffer: Arc<Mutex<String>>,
+}
+
+impl GuiLogger {
+    fn new() -> Self {
+        Self {
+            buffer: Arc::new(Mutex::new(String::new())),
+        }
+    }
+
+    fn get_buffer(&self) -> Arc<Mutex<String>> {
+        Arc::clone(&self.buffer)
+    }
+}
+
+impl Log for GuiLogger {
+    fn enabled(&self, metadata: &Metadata) -> bool {
+        metadata.level() <= Level::Info
+    }
+
+    fn log(&self, record: &Record) {
+        if self.enabled(record.metadata()) {
+            let mut buffer = self.buffer.lock().unwrap();
+            use std::fmt::Write;
+            let _ = writeln!(buffer, "[{}] {}", record.level(), record.args());
+        }
+    }
+
+    fn flush(&self) {}
+}
 
 #[derive(Parser)]
 #[command(name = "slideshow-generator-gui")]
@@ -103,7 +137,7 @@ struct SlideshowApp {
     resolution_coefficient: f32,
     transition: TransitionType,
     transition_duration: f32,
-    status: String,
+    log_buffer: Arc<Mutex<String>>,
     generating: bool,
     tx: Sender<Result<(), String>>,
     rx: Receiver<Result<(), String>>,
@@ -122,7 +156,7 @@ impl Default for SlideshowApp {
             resolution_coefficient: 1.0,
             transition: TransitionType::Triplet,
             transition_duration: 0.5,
-            status: "Ready".to_string(),
+            log_buffer: Arc::new(Mutex::new(String::new())), // Placeholder, will be set in main
             generating: false,
             tx,
             rx,
@@ -136,8 +170,8 @@ impl eframe::App for SlideshowApp {
         if let Ok(result) = self.rx.try_recv() {
             self.generating = false;
             match result {
-                Ok(_) => self.status = "Slideshow generated successfully!".to_string(),
-                Err(e) => self.status = format!("Error: {}", e),
+                Ok(_) => log::info!("Slideshow generated successfully!"),
+                Err(e) => log::error!("Error: {}", e),
             }
         }
 
@@ -172,11 +206,8 @@ impl eframe::App for SlideshowApp {
                         // Auto-set output path to input_dir/slideshow.mp4
                         let output_path = path.join("slideshow.mp4");
                         self.output_path = Some(output_path.clone());
-                        self.status = format!(
-                            "Selected input: {}\nOutput will be: {}",
-                            path.display(),
-                            output_path.display()
-                        );
+                        log::info!("Selected input: {}", path.display());
+                        log::info!("Output will be: {}", output_path.display());
                     }
                 }
             });
@@ -202,7 +233,7 @@ impl eframe::App for SlideshowApp {
 
                     if let Some(path) = dialog.save_file() {
                         self.output_path = Some(path.clone());
-                        self.status = format!("Selected output: {}", path.display());
+                        log::info!("Selected output: {}", path.display());
                     }
                 }
             });
@@ -361,8 +392,8 @@ impl eframe::App for SlideshowApp {
 
             ui.separator();
 
-            // Status with scrollbar filling remaining space
-            ui.label("Status:");
+            // Log output with scrollbar filling remaining space
+            ui.label("Log Output:");
             let available_rect = ui.available_rect_before_wrap();
             let desired_height = available_rect.height();
 
@@ -372,8 +403,9 @@ impl eframe::App for SlideshowApp {
                 .drag_to_scroll(false)
                 .show(ui, |ui| {
                     // Make the text edit take full width and desired height
-                    let mut status_text = self.status.clone();
-                    let text_edit = egui::TextEdit::multiline(&mut status_text)
+                    let log_text = self.log_buffer.lock().unwrap().clone();
+                    let mut display_text = log_text;
+                    let text_edit = egui::TextEdit::multiline(&mut display_text)
                         .desired_width(f32::INFINITY)
                         .desired_rows(
                             (desired_height / ui.text_style_height(&egui::TextStyle::Body)).floor()
@@ -394,14 +426,11 @@ impl SlideshowApp {
         let output_path = folder_path.join("slideshow.mp4");
         self.output_path = Some(output_path.clone());
 
-        // Update status
+        // Log setup information
         let transition_name = self.transition.name();
-        self.status = format!(
-            "Auto-started with folder: {}\nOutput will be: {}\nUsing transition: {}...",
-            folder_path.display(),
-            output_path.display(),
-            transition_name
-        );
+        log::info!("Auto-started with folder: {}", folder_path.display());
+        log::info!("Output will be: {}", output_path.display());
+        log::info!("Using transition: {}", transition_name);
 
         // Start generation automatically
         self.generate_slideshow();
@@ -422,7 +451,7 @@ impl SlideshowApp {
         let tx = self.tx.clone();
 
         self.generating = true;
-        self.status = "Generating slideshow...".to_string();
+        log::info!("Generating slideshow...");
 
         thread::spawn(move || {
             let result = (|| {
@@ -684,6 +713,12 @@ impl eframe::App for HelpApp {
 }
 
 fn main() -> eframe::Result<()> {
+    // Initialize logging first
+    let logger = GuiLogger::new();
+    let log_buffer = logger.get_buffer();
+    log::set_boxed_logger(Box::new(logger)).expect("Failed to set logger");
+    log::set_max_level(LevelFilter::Info);
+
     // Check for help flags before parsing CLI
     let args: Vec<String> = std::env::args().collect();
     if args.iter().any(|arg| arg == "--help" || arg == "-h") {
@@ -699,8 +734,13 @@ fn main() -> eframe::Result<()> {
         ..Default::default()
     };
 
-    // Create the app
-    let mut app = SlideshowApp::default();
+    // Create the app with the shared log buffer
+    let mut app = SlideshowApp {
+        log_buffer: log_buffer.clone(),
+        ..Default::default()
+    };
+
+    log::info!("Slideshow Generator GUI started");
 
     // Set default transition from CLI if provided
     if let Some(transition_str) = cli.transition {
@@ -724,6 +764,11 @@ fn main() -> eframe::Result<()> {
                 folder_path.display()
             );
         }
+    }
+
+    // Set resolution coefficient from CLI if provided
+    if let Some(coef) = cli.resolution_coefficient {
+        app.resolution_coefficient = coef;
     }
 
     eframe::run_native(

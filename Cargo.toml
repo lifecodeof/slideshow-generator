@@ -40,7 +40,7 @@ winapi = { version = "0.3", features = ["windef", "winuser"], optional = true }
 [features]
 default = []
 cli = ["env_logger"]
-gui = ["eframe", "egui", "rfd", "winapi"]
+gui = ["eframe", "egui", "rfd", "winapi", "env_logger"]
 
 [dev-dependencies]
 env_logger = "0.10"
