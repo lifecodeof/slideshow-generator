@@ -20,6 +20,9 @@ struct Cli {
     /// Default transition type
     #[arg(short = 't', long)]
     transition: Option<String>,
+
+    #[arg(short = 'c', long)]
+    resolution_coefficient: Option<f32>,
 }
 
 #[derive(Clone, PartialEq)]
@@ -236,7 +239,11 @@ impl eframe::App for SlideshowApp {
             if !self.use_custom_dimensions {
                 ui.horizontal(|ui| {
                     ui.label("Resolution coefficient:");
-                    ui.add(egui::DragValue::new(&mut self.resolution_coefficient).clamp_range(0.1..=2.0).speed(0.01));
+                    ui.add(
+                        egui::DragValue::new(&mut self.resolution_coefficient)
+                            .clamp_range(0.1..=2.0)
+                            .speed(0.01),
+                    );
                     ui.label("(multiplier for auto-detected resolution)");
                 });
             }
@@ -700,7 +707,10 @@ fn main() -> eframe::Result<()> {
         if let Some(transition) = TransitionType::from_str(&transition_str) {
             app.transition = transition;
         } else {
-            eprintln!("Warning: Unknown transition '{}'. Using default.", transition_str);
+            eprintln!(
+                "Warning: Unknown transition '{}'. Using default.",
+                transition_str
+            );
         }
     }
 
@@ -709,7 +719,10 @@ fn main() -> eframe::Result<()> {
         if folder_path.is_dir() {
             app.setup_from_command_line(folder_path);
         } else {
-            eprintln!("Warning: '{}' is not a valid directory.", folder_path.display());
+            eprintln!(
+                "Warning: '{}' is not a valid directory.",
+                folder_path.display()
+            );
         }
     }
 
