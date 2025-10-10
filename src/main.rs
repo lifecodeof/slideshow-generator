@@ -66,13 +66,23 @@ Available transitions:
     /// Enable verbose logging
     #[arg(short, long)]
     verbose: bool,
+
+    /// Quiet mode, suppress non-error output
+    #[arg(short, long)]
+    quiet: bool,
 }
 
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     // Initialize logger based on verbosity
-    let log_level = if cli.verbose { "debug" } else { "info" };
+    let log_level = if cli.quiet {
+        "error"
+    } else if cli.verbose {
+        "debug"
+    } else {
+        "info"
+    };
 
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or(log_level)).init();
 

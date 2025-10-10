@@ -1,7 +1,7 @@
 # Slideshow Generator
 
-A Rust library/cli/gui and CLI tool for generating slideshow videos from images and
-videos using FFmpeg.
+A Rust library/cli/gui and CLI tool for generating slideshow videos from images
+and videos using FFmpeg.
 
 ## Features
 
@@ -11,6 +11,13 @@ videos using FFmpeg.
 - ⚙️ Configurable image duration, resolution, frame rate, and codec
 - 📚 Both library and CLI interfaces
 - 🔄 Mixed content support (images + videos)
+
+## Transition Showcase
+
+It is possible to add new transitions via library API.
+
+See builtin transitions in action:
+[transition_collage.mp4](examples/transition_collage.mp4)
 
 ## Prerequisites
 

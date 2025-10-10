@@ -9,6 +9,7 @@ readme = "README.md"
 repository = "https://github.com/lifecodeof/slideshow-generator"
 keywords = ["slideshow", "ffmpeg", "cli", "gui", "library"]
 categories = ["multimedia", "command-line-utilities", "gui"]
+default-run = "slideshow-generator"
 
 # Library configuration
 [lib]
