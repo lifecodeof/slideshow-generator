@@ -1,6 +1,7 @@
 # Slideshow Generator
 
-A Rust library and CLI tool for generating slideshow videos from images and videos using FFmpeg.
+A Rust library and CLI tool for generating slideshow videos from images and
+videos using FFmpeg.
 
 ## Features
 
@@ -19,12 +20,15 @@ A Rust library and CLI tool for generating slideshow videos from images and vide
 ## Installation
 
 ### As a CLI tool
+
 ```bash
 cargo install slideshow-generator
 ```
 
 ### As a library dependency
+
 Add to your `Cargo.toml`:
+
 ```toml
 [dependencies]
 slideshow-generator = "0.1.0"
@@ -34,31 +38,51 @@ slideshow-generator = "0.1.0"
 
 ### Command Line Interface
 
-Basic usage:
+Show help:
+
 ```bash
-slideshow-generator --input images_folder --output slideshow.mp4
+slideshow-generator --help
 ```
 
-With custom options:
-```bash
-slideshow-generator 
-  --input images_folder 
-  --output slideshow.mp4 
-  --image-duration 5.0 
-  --width 1280 
-  --height 720 
-  --fps 24 
-  --codec libx265
 ```
+A CLI tool to generate slideshow videos from images and videos
 
-CLI Options:
-- `-i, --input <INPUT>`: Input directory containing images and videos
-- `-o, --output <OUTPUT>`: Output video file path (default: output.mp4)
-- `-d, --image-duration <DURATION>`: Duration in seconds for each image (default: 3.0)
-- `-W, --width <WIDTH>`: Output video width (default: 1920)
-- `-H, --height <HEIGHT>`: Output video height (default: 1080)
-- `-f, --fps <FPS>`: Output video frame rate (default: 30)
-- `-c, --codec <CODEC>`: Video codec to use (default: libx264)
+Usage: slideshow-generator.exe [OPTIONS] --input <INPUT>
+
+Options:
+  -i, --input <INPUT>
+          Input directory containing images and videos
+  -o, --output <OUTPUT>
+          Output video file path [default: output.mp4]
+  -d, --duration-per-slide <DURATION_PER_SLIDE>
+          Duration in seconds for each slide [default: 3.0]
+  -W, --width <WIDTH>
+          Output video width
+  -H, --height <HEIGHT>
+          Output video height
+      --resolution-coefficient <RESOLUTION_COEFFICIENT>
+          Resolution coefficient for auto-detected dimensions (0.0-1.0)
+  -t, --transition <TRANSITION>
+
+          Transition type between slides
+
+          Examples:
+            --transition fade
+            --transition fade:2.5
+            --transition slide-left:1.2
+            --transition wipe-diagonal-tl
+
+          Available transitions:
+            none, fade, dissolve,
+            slide-left, slide-right, slide-up, slide-down,
+            wipe-left, wipe-right, wipe-up, wipe-down,
+            wipe-diagonal-tl, wipe-diagonal-tr
+               [default: none]
+  -v, --verbose
+          Enable verbose logging
+  -h, --help
+          Print help
+```
 
 ### Library API
 
@@ -90,7 +114,7 @@ fn main() -> anyhow::Result<()> {
     // Generate slideshow with custom options
     let generator = SlideshowGenerator::from_directory("input_folder", options)?;
     generator.generate("output.mp4")?;
-    
+
     Ok(())
 }
 ```
@@ -102,15 +126,15 @@ use slideshow_generator::{SlideshowGenerator, SlideshowOptions};
 
 fn main() -> anyhow::Result<()> {
     let mut generator = SlideshowGenerator::new();
-    
+
     // Add files manually
     generator.add_image("image1.jpg");
     generator.add_image("image2.png");
     generator.add_video("video1.mp4");
-    
+
     // Generate slideshow
     generator.generate("output.mp4")?;
-    
+
     Ok(())
 }
 ```
@@ -123,22 +147,30 @@ Configuration struct for slideshow generation with builder pattern methods.
 
 ### `SlideshowGenerator`
 
-Main generator struct with methods for loading media files and generating slideshows.
+Main generator struct with methods for loading media files and generating
+slideshows.
 
 ### Convenience Functions
 
 - `quick_slideshow(input_dir, output_path)` - Generate with defaults
-- `generate_slideshow(input_dir, output_path, options)` - Generate with custom options
+- `generate_slideshow(input_dir, output_path, options)` - Generate with custom
+  options
 
 ## Examples
 
 See the `examples/` directory for comprehensive usage examples.
 
-## License
+#### License
 
-This project is licensed under either of
+<sup>
+Licensed under either of <a href="LICENSE-APACHE">Apache License, Version
+2.0</a> or <a href="LICENSE-MIT">MIT license</a> at your option.
+</sup>
 
-- Apache License, Version 2.0
-- MIT license
+<br>
 
-at your option.
+<sub>
+Unless you explicitly state otherwise, any contribution intentionally submitted
+for inclusion in this crate by you, as defined in the Apache-2.0 license, shall
+be dual licensed as above, without any additional terms or conditions.
+</sub>

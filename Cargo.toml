@@ -2,11 +2,11 @@
 name = "slideshow-generator"
 version = "0.1.0"
 edition = "2021"
-authors = ["Your Name <your.email@example.com>"]
+authors = ["lifecodeof"]
 description = "A Rust library and CLI tool for generating slideshow videos from images and videos"
 license = "MIT OR Apache-2.0"
 readme = "README.md"
-repository = "https://github.com/your-username/slideshow-generator"
+repository = "https://github.com/lifecodeof/slideshow-generator"
 keywords = ["video", "slideshow", "ffmpeg", "images", "multimedia"]
 categories = ["multimedia", "command-line-utilities"]
 
