@@ -17,7 +17,8 @@ and videos using FFmpeg.
 It is possible to add new transitions via library API.
 
 See builtin transitions in action:
-[transition_collage.mp4](examples/transition_collage.mp4)
+
+https://github.com/user-attachments/assets/7e2550d8-d3f5-433f-8ce1-51c736d8b443
 
 ## Prerequisites
 
