@@ -20,4 +20,10 @@ target
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
 
-test_items/slideshow*
+test_items/*
+!test_items/item1.png
+!test_items/item2.png
+!test_items/item3.png
+!test_items/item4.png
+!test_items/item5.png
+!test_items/item6.mp4
