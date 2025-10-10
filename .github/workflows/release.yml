@@ -5,8 +5,8 @@ on:
     types: [published]
 
 permissions:
-  contents: read
-  pages: write
+  attestations: write
+  contents: write
   id-token: write
 
 jobs:
@@ -71,3 +71,4 @@ jobs:
         with:
           files: artifacts/*
           token: ${{ secrets.GITHUB_TOKEN }}
+
