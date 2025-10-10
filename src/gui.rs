@@ -227,6 +227,7 @@ impl eframe::App for SlideshowApp {
                     ui.label("x");
                     ui.add(egui::DragValue::new(&mut self.height).clamp_range(480..=2160));
                 });
+                ui.label("(Custom resolution - coefficient will be ignored)");
             } else {
                 ui.label("Resolution: Auto (from first image)");
             }

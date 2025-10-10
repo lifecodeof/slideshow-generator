@@ -20,20 +20,16 @@ struct Cli {
     duration_per_slide: f32,
 
     /// Output video width
-    #[arg(short = 'W', long, default_value = "1920")]
-    width: u32,
+    #[arg(short = 'W', long, requires = "height", conflicts_with = "resolution_coefficient")]
+    width: Option<u32>,
 
     /// Output video height
-    #[arg(short = 'H', long, default_value = "1080")]
-    height: u32,
-
-    /// Use auto-detected resolution from first image
-    #[arg(long)]
-    auto_resolution: bool,
+    #[arg(short = 'H', long, requires = "width", conflicts_with = "resolution_coefficient")]
+    height: Option<u32>,
 
     /// Resolution coefficient for auto-detected dimensions (0.0-1.0)
-    #[arg(long, default_value = "1.0")]
-    resolution_coefficient: f32,
+    #[arg(long, conflicts_with_all = ["width", "height"])]
+    resolution_coefficient: Option<f32>,
 
     /// Transition type between slides
     #[arg(short = 't', long, default_value = "none")]
@@ -71,12 +67,27 @@ fn main() -> anyhow::Result<()> {
     // Create slideshow options from CLI arguments
     let mut options = SlideshowOptions::new()
         .with_duration_per_slide(cli.duration_per_slide)
-        .with_resolution_coefficient(cli.resolution_coefficient)
         .with_output_path(&cli.output)
         .with_transition(transition);
 
-    if !cli.auto_resolution {
-        options = options.with_output_resolution(cli.width, cli.height);
+    // Handle resolution settings - mutually exclusive
+    match (cli.width, cli.height, cli.resolution_coefficient) {
+        (Some(width), Some(height), None) => {
+            // Custom dimensions provided
+            options = options.with_output_resolution(width, height);
+        }
+        (None, None, Some(coefficient)) => {
+            // Coefficient provided - use auto-detection with coefficient
+            options = options.with_resolution_coefficient(coefficient);
+        }
+        (None, None, None) => {
+            // Neither provided - use defaults (1920x1080)
+            options = options.with_output_resolution(1920, 1080);
+        }
+        _ => {
+            // Invalid combination
+            anyhow::bail!("Specify either custom dimensions (--width and --height) OR resolution coefficient (--resolution-coefficient), not both");
+        }
     }
 
     // Create generator with custom options

@@ -45,18 +45,26 @@ impl SlideshowOptions {
     /// Set the output resolution
     pub fn with_output_resolution(mut self, width: u32, height: u32) -> Self {
         self.output_dimensions = Some((width, height));
+        // Clear coefficient when custom dimensions are set
+        self.resolution_coefficient = 1.0;
         self
     }
 
     /// Set the output dimensions (alias for with_output_resolution)
     pub fn with_output_dimensions(mut self, dimensions: Option<(u32, u32)>) -> Self {
         self.output_dimensions = dimensions;
+        // If dimensions are set, clear coefficient; if None, keep coefficient
+        if dimensions.is_some() {
+            self.resolution_coefficient = 1.0;
+        }
         self
     }
 
     /// Set the resolution coefficient for auto-detected dimensions
     pub fn with_resolution_coefficient(mut self, coefficient: f32) -> Self {
         self.resolution_coefficient = coefficient;
+        // Clear custom dimensions when coefficient is set
+        self.output_dimensions = None;
         self
     }
 
