@@ -747,21 +747,9 @@ fn main() -> eframe::Result<()> {
         if let Some(transition) = TransitionType::from_str(&transition_str) {
             app.transition = transition;
         } else {
-            eprintln!(
+            log::warn!(
                 "Warning: Unknown transition '{}'. Using default.",
                 transition_str
-            );
-        }
-    }
-
-    // If input directory is provided, set it up automatically
-    if let Some(folder_path) = cli.input_dir {
-        if folder_path.is_dir() {
-            app.setup_from_command_line(folder_path);
-        } else {
-            eprintln!(
-                "Warning: '{}' is not a valid directory.",
-                folder_path.display()
             );
         }
     }
@@ -769,6 +757,18 @@ fn main() -> eframe::Result<()> {
     // Set resolution coefficient from CLI if provided
     if let Some(coef) = cli.resolution_coefficient {
         app.resolution_coefficient = coef;
+    }
+
+    // If input directory is provided, set it up automatically
+    if let Some(folder_path) = cli.input_dir {
+        if folder_path.is_dir() {
+            app.setup_from_command_line(folder_path);
+        } else {
+            log::warn!(
+                "Warning: '{}' is not a valid directory.",
+                folder_path.display()
+            );
+        }
     }
 
     eframe::run_native(
