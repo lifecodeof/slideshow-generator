@@ -138,21 +138,18 @@ impl SlideshowGenerator {
 
         for file in media_files {
             // Skip the output file if it's in the same directory
-            if {
+            let is_output_file = if let (Ok(file_canonical), Ok(output_canonical)) =
+                (file.canonicalize(), self.options.output_path.canonicalize())
+            {
                 // Try to compare canonical paths first
-                if let (Ok(file_canonical), Ok(output_canonical)) =
-                    (file.canonicalize(), self.options.output_path.canonicalize())
-                {
-                    file_canonical == output_canonical
-                } else {
-                    // Fall back to filename comparison if canonicalization fails
-                    file.file_name() == self.options.output_path.file_name()
-                        && file.file_name().is_some()
-                }
-            } {
+                file_canonical == output_canonical
+            } else {
+                // Fall back to filename comparison if canonicalization fails
+                file.file_name() == self.options.output_path.file_name() && file.file_name().is_some()
+            };
+            if is_output_file {
                 continue;
             }
-
             if let Some(extension) = file.extension() {
                 let ext = extension.to_string_lossy().to_lowercase();
                 match ext.as_str() {

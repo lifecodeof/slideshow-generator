@@ -37,9 +37,10 @@ pub trait SlideshowTransition: std::fmt::Debug + Clone {
 }
 
 /// Built-in transition types
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub enum BuiltinTransition {
     /// No transition - simple concatenation
+    #[default]
     None,
     /// Crossfade between slides
     Fade { duration: f32 },
@@ -149,12 +150,6 @@ impl SlideshowTransition for BuiltinTransition {
                 WipeDirection::DiagonalTR => "wipe-diagonal-tr",
             },
         }
-    }
-}
-
-impl Default for BuiltinTransition {
-    fn default() -> Self {
-        BuiltinTransition::None
     }
 }
 

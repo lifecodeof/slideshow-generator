@@ -51,12 +51,29 @@ struct Cli {
     /// Input directory containing images/videos
     input_dir: Option<PathBuf>,
 
-    /// Default transition type
-    #[arg(short = 't', long)]
+    /// transition type
+    #[arg(
+        short = 't',
+        long,
+        help = r#"
+Transition type between slides
+
+Available transitions:
+  none, fade, dissolve,
+  slide-left, slide-right, slide-up, slide-down,
+  wipe-left, wipe-right, wipe-up, wipe-down,
+  wipe-diagonal-tl, wipe-diagonal-tr
+    "#
+    )]
     transition: Option<String>,
 
+    /// Resolution coefficient for auto-detected dimensions (0.0-1.0)
     #[arg(short = 'c', long)]
     resolution_coefficient: Option<f32>,
+
+    /// Duration in seconds for each slide
+    #[arg(short = 'd', long)]
+    duration_per_slide: Option<f32>,
 }
 
 #[derive(Clone, PartialEq)]
@@ -98,8 +115,8 @@ impl TransitionType {
             TransitionType::Wipe(WipeDirection::Right) => "Wipe Right",
             TransitionType::Wipe(WipeDirection::Up) => "Wipe Up",
             TransitionType::Wipe(WipeDirection::Down) => "Wipe Down",
-            TransitionType::Wipe(WipeDirection::DiagonalTL) => "Wipe Diagonal TL-BR",
-            TransitionType::Wipe(WipeDirection::DiagonalTR) => "Wipe Diagonal TR-BL",
+            TransitionType::Wipe(WipeDirection::DiagonalTL) => "Wipe Diagonal TL",
+            TransitionType::Wipe(WipeDirection::DiagonalTR) => "Wipe Diagonal TR",
         }
     }
 }
@@ -120,8 +137,8 @@ impl TransitionType {
             "wipe-right" => Some(TransitionType::Wipe(WipeDirection::Right)),
             "wipe-up" => Some(TransitionType::Wipe(WipeDirection::Up)),
             "wipe-down" => Some(TransitionType::Wipe(WipeDirection::Down)),
-            "wipe-diagonal-tl-br" => Some(TransitionType::Wipe(WipeDirection::DiagonalTL)),
-            "wipe-diagonal-tr-bl" => Some(TransitionType::Wipe(WipeDirection::DiagonalTR)),
+            "wipe-diagonal-tl" => Some(TransitionType::Wipe(WipeDirection::DiagonalTL)),
+            "wipe-diagonal-tr" => Some(TransitionType::Wipe(WipeDirection::DiagonalTR)),
             _ => None,
         }
     }
@@ -334,12 +351,12 @@ impl eframe::App for SlideshowApp {
                     ui.selectable_value(
                         &mut self.transition,
                         TransitionType::Wipe(WipeDirection::DiagonalTL),
-                        "Wipe Diagonal TL-BR",
+                        "Wipe Diagonal TL",
                     );
                     ui.selectable_value(
                         &mut self.transition,
                         TransitionType::Wipe(WipeDirection::DiagonalTR),
-                        "Wipe Diagonal TR-BL",
+                        "Wipe Diagonal TR",
                     );
                 });
 
@@ -524,11 +541,11 @@ impl SlideshowApp {
             (TransitionType::Wipe(WipeDirection::Down), "wipe-down"),
             (
                 TransitionType::Wipe(WipeDirection::DiagonalTL),
-                "wipe-diagonal-tl-br",
+                "wipe-diagonal-tl",
             ),
             (
                 TransitionType::Wipe(WipeDirection::DiagonalTR),
-                "wipe-diagonal-tr-bl",
+                "wipe-diagonal-tr",
             ),
         ];
 
@@ -552,10 +569,6 @@ impl SlideshowApp {
 
         for (transition_type, suffix) in transitions {
             let input_dir = input_dir.clone();
-            let dimensions = dimensions;
-            let duration_per_slide = duration_per_slide;
-            let transition_duration = transition_duration;
-            let resolution_coefficient = resolution_coefficient;
 
             let output_path = if suffix == "none" {
                 // For "none", use the base filename without suffix
@@ -630,10 +643,6 @@ impl SlideshowApp {
 
         for (transition_type, suffix) in transitions {
             let input_dir = input_dir.clone();
-            let dimensions = dimensions;
-            let duration_per_slide = duration_per_slide;
-            let transition_duration = transition_duration;
-            let resolution_coefficient = resolution_coefficient;
 
             let output_path =
                 base_output_path.with_file_name(format!("{}.{}.{}", base_name, suffix, extension));
@@ -757,6 +766,11 @@ fn main() -> eframe::Result<()> {
     // Set resolution coefficient from CLI if provided
     if let Some(coef) = cli.resolution_coefficient {
         app.resolution_coefficient = coef;
+    }
+
+    // Set slide duration from CLI if provided
+    if let Some(duration) = cli.duration_per_slide {
+        app.duration_per_slide = duration;
     }
 
     // If input directory is provided, set it up automatically
