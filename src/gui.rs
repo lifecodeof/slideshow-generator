@@ -74,6 +74,10 @@ Available transitions:
     /// Duration in seconds for each slide
     #[arg(short = 'd', long)]
     duration_per_slide: Option<f32>,
+
+    /// Duration in seconds for transition effects
+    #[arg(short = 'g', long)]
+    transition_duration: Option<f32>,
 }
 
 #[derive(Clone, PartialEq)]
@@ -771,6 +775,11 @@ fn main() -> eframe::Result<()> {
     // Set slide duration from CLI if provided
     if let Some(duration) = cli.duration_per_slide {
         app.duration_per_slide = duration;
+    }
+
+    // Set transition duration from CLI if provided
+    if let Some(duration) = cli.transition_duration {
+        app.transition_duration = duration;
     }
 
     // If input directory is provided, set it up automatically
