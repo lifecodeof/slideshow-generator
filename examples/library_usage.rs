@@ -1,7 +1,7 @@
 use anyhow::Result;
 use log::{info, warn};
 use slideshow_generator::{
-    quick_slideshow, BuiltinTransition, SlideshowGenerator, SlideshowOptions,
+    quick_slideshow, BuiltinTransition, SlideshowGenerator, SlideshowOptions, SnowfallOptions,
 };
 use std::path::PathBuf;
 
@@ -122,6 +122,33 @@ fn main() -> Result<()> {
 
     info!("   Auto-resolution options: {}s per slide, dimensions will be auto-detected from first image",
         auto_options.duration_per_slide);
+
+    // Example 6: Christmas snowfall effect
+    info!("6. Christmas snowfall overlay:");
+    let snowfall = SnowfallOptions::new()
+        .with_density(400.0)
+        .with_speed(1.2)
+        .with_wind(-0.6)
+        .with_flake_size(10.0)
+        .with_opacity(0.9);
+
+    info!("   Snowfall settings: {snowfall:?}");
+
+    let snow_options = SlideshowOptions::new()
+        .with_output_resolution(1280, 720)
+        .with_duration_per_slide(3.0)
+        .with_snowfall(Some(snowfall));
+
+    match SlideshowGenerator::from_directory("test_images", snow_options) {
+        Ok(generator) => match generator.generate("example_snow.mp4") {
+            Ok(()) => info!("   ✓ Snowfall slideshow generated successfully!"),
+            Err(e) => warn!("   Error generating snowfall slideshow: {}", e),
+        },
+        Err(e) => warn!(
+            "   Error loading directory: {} (This is expected if test_images doesn't exist)",
+            e
+        ),
+    }
 
     info!("=== Examples completed ===");
     info!(

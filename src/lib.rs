@@ -9,6 +9,7 @@
 //! - Automatic scaling to 1920x1080 with aspect ratio preservation
 //! - Configurable image display duration
 //! - Configurable resolution coefficient for auto-detected dimensions
+//! - Optional Christmas snowfall overlay effect
 //! - Command-line interface for easy usage
 //!
 //! ## Example
@@ -28,11 +29,30 @@
 //! # Ok(())
 //! # }
 //! ```
+//!
+//! ## Christmas snowfall
+//!
+//! ```rust,no_run
+//! use slideshow_generator::{SlideshowGenerator, SlideshowOptions, SnowfallOptions};
+//!
+//! # fn main() -> anyhow::Result<()> {
+//! let snowfall = SnowfallOptions::new().with_density(45.0).with_wind(0.8);
+//! let options = SlideshowOptions::new()
+//!     .with_output_resolution(1920, 1080)
+//!     .with_snowfall(Some(snowfall));
+//!
+//! let generator = SlideshowGenerator::from_directory("christmas_photos", options)?;
+//! generator.generate("christmas.mp4")?;
+//! # Ok(())
+//! # }
+//! ```
 
+pub mod effects;
 pub mod slideshow;
 pub mod transitions;
 pub mod utils;
 
+pub use effects::{SnowfallOptions, SnowfallPlan, SnowflakeLayer};
 pub use slideshow::{SlideshowGenerator, SlideshowOptions};
 pub use transitions::{BuiltinTransition, SlideDirection, SlideshowTransition, WipeDirection};
 

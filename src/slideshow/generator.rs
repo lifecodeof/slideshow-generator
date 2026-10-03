@@ -1,3 +1,4 @@
+use crate::effects::{SnowfallOptions, SnowfallPlan};
 use crate::transitions::BuiltinTransition;
 use crate::utils::{filter_media_files, read_files_from_directory};
 use anyhow::{bail, Result};
@@ -8,6 +9,10 @@ use std::path::{Path, PathBuf};
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 
+/// Label of the assembled slideshow stream inside the filter graph, used when
+/// no effect takes over the final output
+const SLIDESHOW_LABEL: &str = "slideshow";
+
 /// Configuration options for slideshow generation
 #[derive(Debug, Clone)]
 pub struct SlideshowOptions {
@@ -16,6 +21,8 @@ pub struct SlideshowOptions {
     pub resolution_coefficient: f32,
     pub output_path: PathBuf,
     pub transition: BuiltinTransition,
+    /// Christmas snowfall overlay, `None` disables the effect
+    pub snowfall: Option<SnowfallOptions>,
 }
 
 impl Default for SlideshowOptions {
@@ -26,6 +33,7 @@ impl Default for SlideshowOptions {
             resolution_coefficient: 1.0,
             output_path: PathBuf::from("slideshow.mp4"),
             transition: BuiltinTransition::None,
+            snowfall: None,
         }
     }
 }
@@ -87,6 +95,22 @@ impl SlideshowOptions {
     /// Set the transition between slides
     pub fn with_transition(mut self, transition: BuiltinTransition) -> Self {
         self.transition = transition;
+        self
+    }
+
+    /// Enable the Christmas snowfall overlay with default settings
+    ///
+    /// Use [`SlideshowOptions::with_snowfall`] to tune the effect.
+    pub fn with_snowfall_enabled(mut self) -> Self {
+        self.snowfall = Some(SnowfallOptions::default());
+        self
+    }
+
+    /// Set the Christmas snowfall overlay configuration
+    ///
+    /// Passing `None` disables the effect.
+    pub fn with_snowfall(mut self, snowfall: Option<SnowfallOptions>) -> Self {
+        self.snowfall = snowfall;
         self
     }
 }
@@ -210,16 +234,24 @@ impl SlideshowGenerator {
     }
 
     /// Generate transition filters for multiple inputs
-    fn generate_transition_filters(&self, input_labels: &[String]) -> Result<String> {
+    ///
+    /// The assembled slideshow stream is written to `output_label`, so callers
+    /// can chain further filters (such as effects) onto the result.
+    fn generate_transition_filters(
+        &self,
+        input_labels: &[String],
+        output_label: &str,
+    ) -> Result<String> {
         use crate::transitions::SlideshowTransition;
 
         match &self.options.transition {
             BuiltinTransition::None => {
                 // Simple concatenation without transitions
                 Ok(format!(
-                    "{}concat=n={}:v=1:a=0[outv]",
+                    "{}concat=n={}:v=1:a=0[{}]",
                     input_labels.join(""),
-                    input_labels.len()
+                    input_labels.len(),
+                    output_label
                 ))
             }
             transition => {
@@ -228,8 +260,8 @@ impl SlideshowGenerator {
                     // Single input - just pass through
                     let (width, height) = self.get_output_dimensions()?;
                     Ok(format!(
-                        "{}scale={}:{}[outv]",
-                        input_labels[0], width, height
+                        "{}scale={}:{}[{}]",
+                        input_labels[0], width, height, output_label
                     ))
                 } else if input_labels.len() == 2 {
                     // Two inputs - simple xfade (proven to work)
@@ -238,12 +270,12 @@ impl SlideshowGenerator {
                     Ok(transition.to_ffmpeg_filter(
                         &input_labels[0],
                         &input_labels[1],
-                        "[outv]",
+                        &format!("[{}]", output_label),
                         offset,
                     ))
                 } else {
                     // Multiple inputs: Use practical approach for common case (5 images + 1 video)
-                    self.generate_practical_multi_transitions(input_labels, transition)
+                    self.generate_practical_multi_transitions(input_labels, transition, output_label)
                 }
             }
         }
@@ -255,6 +287,7 @@ impl SlideshowGenerator {
         &self,
         input_labels: &[String],
         transition: &BuiltinTransition,
+        output_label: &str,
     ) -> Result<String> {
         use crate::transitions::SlideshowTransition;
 
@@ -266,9 +299,10 @@ impl SlideshowGenerator {
         if image_labels.len() < 2 {
             // No transitions possible
             return Ok(format!(
-                "{}concat=n={}:v=1:a=0[outv]",
+                "{}concat=n={}:v=1:a=0[{}]",
                 input_labels.join(""),
-                input_labels.len()
+                input_labels.len(),
+                output_label
             ));
         }
 
@@ -319,11 +353,12 @@ impl SlideshowGenerator {
             if image_labels.len() == 2 {
                 // For 2 images, the result is already correctly labeled
                 if let Some(last_filter) = filter_parts.last_mut() {
-                    *last_filter = last_filter.replace("[images_result]", "[outv]");
+                    *last_filter =
+                        last_filter.replace("[images_result]", &format!("[{}]", output_label));
                 }
             } else {
                 // For multiple images, rename the final result
-                filter_parts.push("[images_result]null[outv]".to_string());
+                filter_parts.push(format!("[images_result]null[{}]", output_label));
             }
         } else {
             // Concatenate with videos
@@ -331,9 +366,10 @@ impl SlideshowGenerator {
             final_inputs.extend(video_labels.iter().cloned());
 
             filter_parts.push(format!(
-                "{}concat=n={}:v=1:a=0[outv]",
+                "{}concat=n={}:v=1:a=0[{}]",
                 final_inputs.join(""),
-                final_inputs.len()
+                final_inputs.len(),
+                output_label
             ));
         }
 
@@ -353,6 +389,28 @@ impl SlideshowGenerator {
     /// Get the total number of media items
     pub fn total_count(&self) -> usize {
         self.images.len() + self.videos.len()
+    }
+
+    /// Build the Christmas snowfall overlay for the given output size
+    ///
+    /// Returns an inactive plan when the snowfall is disabled or would be
+    /// completely invisible, so callers can use the result unconditionally.
+    fn build_snowfall_plan(&self, width: u32, height: u32) -> Result<SnowfallPlan> {
+        match &self.options.snowfall {
+            Some(snowfall) => {
+                debug!(
+                    "Preparing Christmas snowfall overlay (density: {}, speed: {}, wind: {})",
+                    snowfall.density, snowfall.speed, snowfall.wind
+                );
+                SnowfallPlan::prepare(
+                    snowfall,
+                    width,
+                    height,
+                    self.images.len() + self.videos.len(),
+                )
+            }
+            None => Ok(SnowfallPlan::inactive()),
+        }
     }
 
     /// Generate the slideshow video (modern API)
@@ -424,19 +482,39 @@ impl SlideshowGenerator {
             input_labels.push(format!("[vid{}]", i));
         }
 
+        // Prepare the snowfall overlay before assembling the filter graph, so
+        // its labels and inputs can be wired in below. An effect takes over the
+        // final output label, otherwise the slideshow stream is encoded as is.
+        let snowfall_plan = self.build_snowfall_plan(output_width, output_height)?;
+        let (chain_output_label, map_label) = if snowfall_plan.is_active() {
+            debug!("Applying Christmas snowfall overlay");
+            (snowfall_plan.input_label(), snowfall_plan.output_label())
+        } else {
+            (SLIDESHOW_LABEL, SLIDESHOW_LABEL)
+        };
+
         // Apply transitions between consecutive inputs
         let filter_result = if input_labels.len() <= 1 {
             // Single input or no inputs - just pass through
             let default_input = "[0:v]".to_string();
             let input = input_labels.first().unwrap_or(&default_input);
-            format!("{}scale={}:{}[outv]", input, output_width, output_height)
+            format!(
+                "{}scale={}:{}[{}]",
+                input, output_width, output_height, chain_output_label
+            )
         } else {
             // Multiple inputs - apply transitions or concatenation
-            self.generate_transition_filters(&input_labels)?
+            self.generate_transition_filters(&input_labels, chain_output_label)?
         };
 
         filter_parts.push(filter_result);
-        let filter_complex = filter_parts.join(";");
+
+        // Append the effect filters after the slideshow stream is assembled
+        let mut filter_complex = filter_parts.join(";");
+        if snowfall_plan.is_active() {
+            filter_complex.push(';');
+            filter_complex.push_str(snowfall_plan.filter_chain());
+        }
         debug!("Generated filter_complex: {}", filter_complex);
 
         // Build FFmpeg command
@@ -460,11 +538,14 @@ impl SlideshowGenerator {
             cmd.arg("-i").arg(video_path);
         }
 
+        // Add the snow tile inputs, they come after every media input
+        cmd.args(snowfall_plan.input_argv());
+
         // Add filter and output
         cmd.arg("-filter_complex")
             .arg(&filter_complex)
             .arg("-map")
-            .arg("[outv]")
+            .arg(format!("[{}]", map_label))
             .arg("-c:v")
             .arg("libx264")
             .arg("-pix_fmt")

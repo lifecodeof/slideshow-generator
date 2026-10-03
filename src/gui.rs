@@ -5,7 +5,8 @@ use eframe::egui;
 use log::{Level, LevelFilter, Log, Metadata, Record};
 use rfd::FileDialog;
 use slideshow_generator::{
-    BuiltinTransition, SlideDirection, SlideshowGenerator, SlideshowOptions, WipeDirection,
+    BuiltinTransition, SlideDirection, SlideshowGenerator, SlideshowOptions, SnowfallOptions,
+    WipeDirection,
 };
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -78,6 +79,10 @@ Available transitions:
     /// Duration in seconds for transition effects
     #[arg(short = 'g', long)]
     transition_duration: Option<f32>,
+
+    /// Enable the Christmas snowfall effect
+    #[arg(long)]
+    snow: bool,
 }
 
 #[derive(Clone, PartialEq)]
@@ -158,10 +163,53 @@ struct SlideshowApp {
     resolution_coefficient: f32,
     transition: TransitionType,
     transition_duration: f32,
+    snowfall: SnowfallSettings,
     log_buffer: Arc<Mutex<String>>,
     generating: bool,
     tx: Sender<Result<(), String>>,
     rx: Receiver<Result<(), String>>,
+}
+
+/// Christmas snowfall settings shown in the GUI
+#[derive(Clone, PartialEq)]
+struct SnowfallSettings {
+    enabled: bool,
+    density: f32,
+    speed: f32,
+    wind: f32,
+    flake_size: f32,
+    opacity: f32,
+}
+
+impl Default for SnowfallSettings {
+    fn default() -> Self {
+        let defaults = SnowfallOptions::new();
+        Self {
+            enabled: false,
+            density: defaults.density,
+            speed: defaults.speed,
+            wind: defaults.wind,
+            flake_size: defaults.flake_size,
+            opacity: defaults.opacity,
+        }
+    }
+}
+
+impl SnowfallSettings {
+    fn to_options(&self) -> Option<SnowfallOptions> {
+        if !self.enabled {
+            return None;
+        }
+
+        Some(
+            SnowfallOptions::new()
+                .with_density(self.density)
+                .with_speed(self.speed)
+                .with_wind(self.wind)
+                .with_flake_size(self.flake_size)
+                .with_opacity(self.opacity),
+        )
+    }
 }
 
 impl Default for SlideshowApp {
@@ -177,6 +225,7 @@ impl Default for SlideshowApp {
             resolution_coefficient: 1.0,
             transition: TransitionType::Triplet,
             transition_duration: 0.5,
+            snowfall: SnowfallSettings::default(),
             log_buffer: Arc::new(Mutex::new(String::new())), // Placeholder, will be set in main
             generating: false,
             tx,
@@ -378,6 +427,61 @@ impl eframe::App for SlideshowApp {
 
             ui.separator();
 
+            // Christmas snowfall effect
+            ui.label("Effects:");
+            ui.checkbox(&mut self.snowfall.enabled, "Christmas snowfall");
+
+            if self.snowfall.enabled {
+                egui::Grid::new("snowfall_grid")
+                    .num_columns(2)
+                    .spacing([12.0, 6.0])
+                    .show(ui, |ui| {
+                        ui.label("Density:");
+                        ui.add(
+                            egui::DragValue::new(&mut self.snowfall.density)
+                                .clamp_range(0.0..=2000.0)
+                                .speed(5.0),
+                        );
+                        ui.end_row();
+
+                        ui.label("Speed:");
+                        ui.add(
+                            egui::DragValue::new(&mut self.snowfall.speed)
+                                .clamp_range(0.05..=20.0)
+                                .speed(0.05),
+                        );
+                        ui.end_row();
+
+                        ui.label("Wind:");
+                        ui.add(
+                            egui::DragValue::new(&mut self.snowfall.wind)
+                                .clamp_range(-10.0..=10.0)
+                                .speed(0.05),
+                        );
+                        ui.end_row();
+
+                        ui.label("Flake size:");
+                        ui.add(
+                            egui::DragValue::new(&mut self.snowfall.flake_size)
+                                .clamp_range(0.5..=100.0)
+                                .speed(0.5),
+                        );
+                        ui.end_row();
+
+                        ui.label("Opacity:");
+                        ui.add(
+                            egui::DragValue::new(&mut self.snowfall.opacity)
+                                .clamp_range(0.0..=1.0)
+                                .speed(0.05),
+                        );
+                        ui.end_row();
+                    });
+
+                ui.label("Negative wind blows the snow to the left");
+            }
+
+            ui.separator();
+
             // Generate button
             let can_generate =
                 self.input_dir.is_some() && self.output_path.is_some() && !self.generating;
@@ -453,6 +557,10 @@ impl SlideshowApp {
         log::info!("Output will be: {}", output_path.display());
         log::info!("Using transition: {}", transition_name);
 
+        if self.snowfall.enabled {
+            log::info!("Christmas snowfall enabled");
+        }
+
         // Start generation automatically
         self.generate_slideshow();
     }
@@ -469,6 +577,7 @@ impl SlideshowApp {
         let resolution_coefficient = self.resolution_coefficient;
         let transition = self.transition.clone();
         let transition_duration = self.transition_duration;
+        let snowfall = self.snowfall.to_options();
         let tx = self.tx.clone();
 
         self.generating = true;
@@ -486,6 +595,7 @@ impl SlideshowApp {
                             dimensions,
                             transition_duration,
                             resolution_coefficient,
+                            snowfall,
                         )
                     }
                     TransitionType::Every => {
@@ -497,6 +607,7 @@ impl SlideshowApp {
                             dimensions,
                             transition_duration,
                             resolution_coefficient,
+                            snowfall,
                         )
                     }
                     _ => {
@@ -505,7 +616,8 @@ impl SlideshowApp {
                         let mut options = SlideshowOptions::new()
                             .with_duration_per_slide(duration_per_slide)
                             .with_transition(builtin_transition)
-                            .with_resolution_coefficient(resolution_coefficient);
+                            .with_resolution_coefficient(resolution_coefficient)
+                            .with_snowfall(snowfall);
 
                         if let Some((width, height)) = dimensions {
                             options = options.with_output_resolution(width, height);
@@ -529,6 +641,7 @@ impl SlideshowApp {
         dimensions: Option<(u32, u32)>,
         transition_duration: f32,
         resolution_coefficient: f32,
+        snowfall: Option<SnowfallOptions>,
     ) -> Result<(), anyhow::Error> {
         // Define all transitions to generate
         let transitions = vec![
@@ -573,6 +686,7 @@ impl SlideshowApp {
 
         for (transition_type, suffix) in transitions {
             let input_dir = input_dir.clone();
+            let snowfall = snowfall.clone();
 
             let output_path = if suffix == "none" {
                 // For "none", use the base filename without suffix
@@ -588,7 +702,8 @@ impl SlideshowApp {
                 let mut options = SlideshowOptions::new()
                     .with_duration_per_slide(duration_per_slide)
                     .with_transition(builtin_transition)
-                    .with_resolution_coefficient(resolution_coefficient);
+                    .with_resolution_coefficient(resolution_coefficient)
+                    .with_snowfall(snowfall);
 
                 if let Some((width, height)) = dimensions {
                     options = options.with_output_resolution(width, height);
@@ -619,6 +734,7 @@ impl SlideshowApp {
         dimensions: Option<(u32, u32)>,
         transition_duration: f32,
         resolution_coefficient: f32,
+        snowfall: Option<SnowfallOptions>,
     ) -> Result<(), anyhow::Error> {
         // Define the three triplet transitions
         let transitions = vec![
@@ -647,6 +763,7 @@ impl SlideshowApp {
 
         for (transition_type, suffix) in transitions {
             let input_dir = input_dir.clone();
+            let snowfall = snowfall.clone();
 
             let output_path =
                 base_output_path.with_file_name(format!("{}.{}.{}", base_name, suffix, extension));
@@ -656,7 +773,8 @@ impl SlideshowApp {
                 let mut options = SlideshowOptions::new()
                     .with_duration_per_slide(duration_per_slide)
                     .with_transition(builtin_transition)
-                    .with_resolution_coefficient(resolution_coefficient);
+                    .with_resolution_coefficient(resolution_coefficient)
+                    .with_snowfall(snowfall);
 
                 if let Some((width, height)) = dimensions {
                     options = options.with_output_resolution(width, height);
@@ -678,6 +796,64 @@ impl SlideshowApp {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_snowfall_settings_default_to_disabled() {
+        let settings = SnowfallSettings::default();
+        assert!(!settings.enabled);
+        assert!(settings.to_options().is_none());
+    }
+
+    #[test]
+    fn test_snowfall_settings_use_library_defaults() {
+        let settings = SnowfallSettings::default();
+        let defaults = SnowfallOptions::new();
+
+        assert_eq!(settings.density, defaults.density);
+        assert_eq!(settings.speed, defaults.speed);
+        assert_eq!(settings.wind, defaults.wind);
+        assert_eq!(settings.flake_size, defaults.flake_size);
+        assert_eq!(settings.opacity, defaults.opacity);
+    }
+
+    #[test]
+    fn test_enabled_snowfall_maps_to_options() {
+        let settings = SnowfallSettings {
+            enabled: true,
+            density: 250.0,
+            speed: 2.0,
+            wind: -0.75,
+            flake_size: 12.0,
+            opacity: 0.5,
+        };
+
+        let options = settings.to_options().expect("snowfall should be enabled");
+        assert_eq!(options.density, 250.0);
+        assert_eq!(options.speed, 2.0);
+        assert_eq!(options.wind, -0.75);
+        assert_eq!(options.flake_size, 12.0);
+        assert_eq!(options.opacity, 0.5);
+        assert!(options.validate().is_ok());
+    }
+
+    #[test]
+    fn test_snowfall_cli_flag_enables_the_effect() {
+        let cli = Cli {
+            input_dir: None,
+            transition: None,
+            resolution_coefficient: None,
+            duration_per_slide: None,
+            transition_duration: None,
+            snow: true,
+        };
+
+        assert!(cli.snow);
     }
 }
 
@@ -780,6 +956,12 @@ fn main() -> eframe::Result<()> {
     // Set transition duration from CLI if provided
     if let Some(duration) = cli.transition_duration {
         app.transition_duration = duration;
+    }
+
+    // Enable the Christmas snowfall effect from CLI if requested
+    if cli.snow {
+        app.snowfall.enabled = true;
+        log::info!("Christmas snowfall enabled");
     }
 
     // If input directory is provided, set it up automatically

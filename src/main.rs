@@ -1,11 +1,14 @@
 use clap::Parser;
 use log::{error, info};
-use slideshow_generator::{BuiltinTransition, SlideshowGenerator, SlideshowOptions};
+use slideshow_generator::{
+    BuiltinTransition, SlideshowGenerator, SlideshowOptions, SnowfallOptions,
+};
 use std::path::PathBuf;
 
 #[derive(Parser)]
 #[command(name = "slideshow-generator")]
 #[command(about = "A CLI tool to generate slideshow videos from images and videos")]
+#[command(allow_negative_numbers = true)]
 struct Cli {
     /// Input directory containing images and videos
     #[arg(short, long)]
@@ -63,6 +66,37 @@ Available transitions:
     )]
     transition: String,
 
+    /// Add the Christmas snowfall effect over the slideshow
+    ///
+    /// Every snowfall option below turns the effect on as well, so passing
+    /// `--snow-density 150` is enough without `--snow`.
+    #[arg(short = 's', long)]
+    snow: bool,
+
+    /// Snowflakes per megapixel, per layer [default: 200]
+    #[arg(long)]
+    snow_density: Option<f32>,
+
+    /// Snow fall speed multiplier [default: 1.0]
+    #[arg(long)]
+    snow_speed: Option<f32>,
+
+    /// Horizontal wind, negative blows the snow to the left [default: 0.3]
+    #[arg(long)]
+    snow_wind: Option<f32>,
+
+    /// Snowflake diameter in pixels for 1080p [default: 8.0]
+    #[arg(long)]
+    snow_size: Option<f32>,
+
+    /// Snow opacity between 0.0 and 1.0 [default: 0.85]
+    #[arg(long)]
+    snow_opacity: Option<f32>,
+
+    /// Seed of the snowflake pattern, for reproducible results
+    #[arg(long)]
+    snow_seed: Option<u64>,
+
     /// Enable verbose logging
     #[arg(short, long)]
     verbose: bool,
@@ -108,7 +142,8 @@ fn main() -> anyhow::Result<()> {
     let mut options = SlideshowOptions::new()
         .with_duration_per_slide(cli.duration_per_slide)
         .with_output_path(&cli.output)
-        .with_transition(transition);
+        .with_transition(transition)
+        .with_snowfall(snowfall_options(&cli)?);
 
     // Handle resolution settings - mutually exclusive
     match (cli.width, cli.height, cli.resolution_coefficient) {
@@ -133,15 +168,58 @@ fn main() -> anyhow::Result<()> {
     // Create generator with custom options
     let generator = SlideshowGenerator::from_directory(&cli.input, options)?;
 
-    info!(
-        "Found {} images and {} videos",
-        generator.image_count(),
-        generator.video_count()
-    );
+    info!("Found {} images and {} videos", generator.image_count(), generator.video_count());
+
+    if generator.options().snowfall.is_some() {
+        info!("Christmas snowfall enabled");
+    }
+
     info!("Generating slideshow to: {}", cli.output.display());
 
     // Generate the slideshow using the modern API
     generator.generate(&cli.output)?;
 
     Ok(())
+}
+
+/// Build the snowfall configuration from the CLI arguments
+///
+/// The effect is enabled by `--snow` or by passing any of the tuning options,
+/// so `--snow-density 150` works on its own. Returns `None` when disabled.
+fn snowfall_options(cli: &Cli) -> anyhow::Result<Option<SnowfallOptions>> {
+    let tuned = cli.snow_density.is_some()
+        || cli.snow_speed.is_some()
+        || cli.snow_wind.is_some()
+        || cli.snow_size.is_some()
+        || cli.snow_opacity.is_some()
+        || cli.snow_seed.is_some();
+
+    if !cli.snow && !tuned {
+        return Ok(None);
+    }
+
+    let mut snowfall = SnowfallOptions::new();
+
+    if let Some(density) = cli.snow_density {
+        snowfall = snowfall.with_density(density);
+    }
+    if let Some(speed) = cli.snow_speed {
+        snowfall = snowfall.with_speed(speed);
+    }
+    if let Some(wind) = cli.snow_wind {
+        snowfall = snowfall.with_wind(wind);
+    }
+    if let Some(size) = cli.snow_size {
+        snowfall = snowfall.with_flake_size(size);
+    }
+    if let Some(opacity) = cli.snow_opacity {
+        snowfall = snowfall.with_opacity(opacity);
+    }
+    if let Some(seed) = cli.snow_seed {
+        snowfall = snowfall.with_seed(seed);
+    }
+
+    snowfall.validate()?;
+
+    Ok(Some(snowfall))
 }
