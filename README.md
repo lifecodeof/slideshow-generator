@@ -40,7 +40,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-slideshow-generator = "0.1.0"
+slideshow-generator = "0.2.0"
 ```
 
 ## Usage
