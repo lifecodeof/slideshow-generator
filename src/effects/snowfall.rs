@@ -626,18 +626,36 @@ fn star_filter_chain(star_input: usize, stars: &[ShootingStar]) -> String {
     let mut chain =
         format!("[{input}:v]format=rgba,fps={fps},setsar=1[star_src];", input = star_input, fps = SNOW_FRAME_RATE);
 
+    // One sprite is shared by every star, so a single split fans it out. The
+    // split has to declare and name *all* of its outputs at once: an unnamed
+    // output becomes a dangling sink, which FFmpeg maps straight to the
+    // encoder and then fails on for being the size of the sprite.
     let mut branches = Vec::with_capacity(stars.len());
+    let mut raw_labels = Vec::with_capacity(stars.len());
+    for index in 0..stars.len() {
+        raw_labels.push(format!("star{index}_src"));
+        branches.push(format!("star{index}"));
+    }
+
+    chain.push_str(&format!(
+        "[star_src]split={n}{outs};",
+        n = stars.len(),
+        outs = raw_labels
+            .iter()
+            .map(|label| format!("[{label}]"))
+            .collect::<Vec<_>>()
+            .join("")
+    ));
+
+    // Each branch then scales its own alpha, which gives every star an
+    // individual brightness without needing another input.
     for (index, star) in stars.iter().enumerate() {
-        let raw = format!("star{index}_src");
-        let label = format!("star{index}");
-        chain.push_str(&format!("[star_src]split={n}[{raw}];", n = stars.len()));
-        // One sprite serves every star, so each branch scales its own alpha to
-        // get an individual brightness without another input.
         chain.push_str(&format!(
             "[{raw}]colorchannelmixer=aa={alpha}[{label}];",
+            raw = raw_labels[index],
             alpha = format_number(star.brightness),
+            label = branches[index],
         ));
-        branches.push(label);
     }
 
     // The snow is opaque by now, so the star blend can stay in the default
@@ -1019,6 +1037,7 @@ impl Rng {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
 
     fn visible_pixels(image: &RgbaImage) -> usize {
         image.pixels().filter(|pixel| pixel.0[3] > 0).count()
@@ -1467,7 +1486,20 @@ mod tests {
             "sprite input missing from: {}",
             chain
         );
-        assert!(chain.contains("split=2"));
+
+        // A single split must name every one of its outputs. An unnamed output
+        // is a dangling sink that FFmpeg routes to the encoder.
+        assert_eq!(
+            chain.matches("split=").count(),
+            1,
+            "expected one split for all stars: {}",
+            chain
+        );
+        assert!(
+            chain.contains("split=2[star0_src][star1_src]"),
+            "split does not name both outputs: {}",
+            chain
+        );
         // Each branch scales the shared sprite to its own brightness.
         assert!(
             chain.contains("colorchannelmixer=aa=0.8"),
@@ -1511,6 +1543,121 @@ mod tests {
             alpha_at(63, middle) > alpha_at(63, 0),
             "sprite has no vertical falloff"
         );
+    }
+
+    #[test]
+    fn test_plan_leaves_no_dangling_filter_outputs() {
+        // Every label a filter produces must be consumed by another filter.
+        // A dangling output becomes a stream in its own right, which is how an
+        // unnamed `split` output ended up being encoded as the star sprite and
+        // failing the render.
+        //
+        // The chains are built directly rather than through `prepare`, so the
+        // check stays cheap; `prepare` writes four large PNG tiles per call.
+        for star_count in 1..=MAX_STARS {
+            let stars: Vec<ShootingStar> = (0..star_count)
+                .map(|index| ShootingStar {
+                    start: 1.0 + index as f32 * 3.0,
+                    duration: 0.5,
+                    x: -100.0,
+                    y: 100.0,
+                    velocity_x: 900.0,
+                    velocity_y: 200.0,
+                    brightness: 0.8,
+                })
+                .collect();
+
+            let chain = star_filter_chain(7, &stars);
+
+            // Count how often each label is written and read. Reads have to match
+            // writes for every label, except the final one which the generator
+            // maps to the output file. A label written more often than it is
+            // read is a dangling stream, and FFmpeg routes those straight to the
+            // encoder, which is how an unnamed `split` output ended up being
+            // encoded as the star sprite.
+            //
+            // Reusing a label sequentially, as the chains do with their
+            // accumulator, is fine: it is written and read once per step.
+            let mut written: HashMap<String, usize> = HashMap::new();
+            let mut read: HashMap<String, usize> = HashMap::new();
+
+            for part in chain.split(';') {
+                let (inputs, outputs) = split_segment(part);
+
+                for label in inputs {
+                    // `7:v` style labels come from the input files themselves,
+                    // and `[snowdone]` from the snow chain upstream.
+                    if !label.contains(':') && label != SNOW_OUTPUT_LABEL_FINAL {
+                        *read.entry(label).or_default() += 1;
+                    }
+                }
+                for label in outputs {
+                    *written.entry(label).or_default() += 1;
+                }
+            }
+
+            let output_label = SNOW_OUTPUT_LABEL;
+            let mut mismatched = Vec::new();
+            for (label, times_written) in &written {
+                let times_read = read.get(label).copied().unwrap_or(0);
+                let expected_reads = if label == output_label {
+                    times_written - 1
+                } else {
+                    *times_written
+                };
+
+                if times_read != expected_reads {
+                    mismatched.push(format!(
+                        "[{}] written {} time(s), read {} time(s)",
+                        label, times_written, times_read
+                    ));
+                }
+            }
+
+            assert!(
+                mismatched.is_empty(),
+                "filter graph has unbalanced labels: {:?}\n{}",
+                mismatched,
+                chain
+            );
+            assert_eq!(written.get(output_label), Some(&1));
+        }
+    }
+
+    /// Split one `filter_complex` segment into its input and output labels.
+    ///
+    /// The split point is the first `=` outside of single quotes, because
+    /// overlay expressions are full of `=` inside their quoted arguments.
+    fn split_segment(part: &str) -> (Vec<String>, Vec<String>) {
+        let mut in_quotes = false;
+        let mut split_at = None;
+
+        for (index, character) in part.char_indices() {
+            match character {
+                '\'' => in_quotes = !in_quotes,
+                '=' if !in_quotes => {
+                    split_at = Some(index);
+                    break;
+                }
+                _ => {}
+            }
+        }
+
+        let (head, tail) = match split_at {
+            Some(index) => (&part[..index], &part[index..]),
+            None => (part, ""),
+        };
+
+        (brackets(head), brackets(tail))
+    }
+
+    /// Bracketed labels in a fragment
+    fn brackets(fragment: &str) -> Vec<String> {
+        fragment
+            .split('[')
+            .skip(1)
+            .filter_map(|chunk| chunk.split(']').next().map(str::to_string))
+            .collect()
     }
 
     #[test]
