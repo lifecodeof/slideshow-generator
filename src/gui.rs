@@ -12,6 +12,7 @@ use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 struct GuiLogger {
     buffer: Arc<Mutex<String>>,
@@ -43,6 +44,16 @@ impl Log for GuiLogger {
     }
 
     fn flush(&self) {}
+}
+
+/// Pick a fresh seed so consecutive renders differ
+fn random_seed() -> u64 {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_nanos() as u64)
+        .unwrap_or(0);
+
+    nanos ^ ((std::process::id() as u64) << 32)
 }
 
 #[derive(Parser)]
@@ -170,45 +181,18 @@ struct SlideshowApp {
     rx: Receiver<Result<(), String>>,
 }
 
-/// Christmas snowfall settings shown in the GUI
-#[derive(Clone, PartialEq)]
+/// Christmas snowfall toggle shown in the GUI
+///
+/// There are no parameters to set: each render draws its own seed, which in turn
+/// derives the snow and the shooting stars, so every render differs.
+#[derive(Clone, Copy, PartialEq)]
 struct SnowfallSettings {
     enabled: bool,
-    density: f32,
-    speed: f32,
-    wind: f32,
-    flake_size: f32,
-    opacity: f32,
 }
 
 impl Default for SnowfallSettings {
     fn default() -> Self {
-        let defaults = SnowfallOptions::new();
-        Self {
-            enabled: false,
-            density: defaults.density,
-            speed: defaults.speed,
-            wind: defaults.wind,
-            flake_size: defaults.flake_size,
-            opacity: defaults.opacity,
-        }
-    }
-}
-
-impl SnowfallSettings {
-    fn to_options(&self) -> Option<SnowfallOptions> {
-        if !self.enabled {
-            return None;
-        }
-
-        Some(
-            SnowfallOptions::new()
-                .with_density(self.density)
-                .with_speed(self.speed)
-                .with_wind(self.wind)
-                .with_flake_size(self.flake_size)
-                .with_opacity(self.opacity),
-        )
+        Self { enabled: false }
     }
 }
 
@@ -428,56 +412,10 @@ impl eframe::App for SlideshowApp {
             ui.separator();
 
             // Christmas snowfall effect
-            ui.label("Effects:");
             ui.checkbox(&mut self.snowfall.enabled, "Christmas snowfall");
 
             if self.snowfall.enabled {
-                egui::Grid::new("snowfall_grid")
-                    .num_columns(2)
-                    .spacing([12.0, 6.0])
-                    .show(ui, |ui| {
-                        ui.label("Density:");
-                        ui.add(
-                            egui::DragValue::new(&mut self.snowfall.density)
-                                .clamp_range(0.0..=2000.0)
-                                .speed(5.0),
-                        );
-                        ui.end_row();
-
-                        ui.label("Speed:");
-                        ui.add(
-                            egui::DragValue::new(&mut self.snowfall.speed)
-                                .clamp_range(0.05..=20.0)
-                                .speed(0.05),
-                        );
-                        ui.end_row();
-
-                        ui.label("Wind:");
-                        ui.add(
-                            egui::DragValue::new(&mut self.snowfall.wind)
-                                .clamp_range(-10.0..=10.0)
-                                .speed(0.05),
-                        );
-                        ui.end_row();
-
-                        ui.label("Flake size:");
-                        ui.add(
-                            egui::DragValue::new(&mut self.snowfall.flake_size)
-                                .clamp_range(0.5..=100.0)
-                                .speed(0.5),
-                        );
-                        ui.end_row();
-
-                        ui.label("Opacity:");
-                        ui.add(
-                            egui::DragValue::new(&mut self.snowfall.opacity)
-                                .clamp_range(0.0..=1.0)
-                                .speed(0.05),
-                        );
-                        ui.end_row();
-                    });
-
-                ui.label("Negative wind blows the snow to the left");
+                ui.label("Each render draws its own snow, so no two look the same.");
             }
 
             ui.separator();
@@ -577,7 +515,7 @@ impl SlideshowApp {
         let resolution_coefficient = self.resolution_coefficient;
         let transition = self.transition.clone();
         let transition_duration = self.transition_duration;
-        let snowfall = self.snowfall.to_options();
+        let snowfall_enabled = self.snowfall.enabled;
         let tx = self.tx.clone();
 
         self.generating = true;
@@ -595,7 +533,7 @@ impl SlideshowApp {
                             dimensions,
                             transition_duration,
                             resolution_coefficient,
-                            snowfall,
+                            snowfall_enabled,
                         )
                     }
                     TransitionType::Every => {
@@ -607,7 +545,7 @@ impl SlideshowApp {
                             dimensions,
                             transition_duration,
                             resolution_coefficient,
-                            snowfall,
+                            snowfall_enabled,
                         )
                     }
                     _ => {
@@ -617,7 +555,10 @@ impl SlideshowApp {
                             .with_duration_per_slide(duration_per_slide)
                             .with_transition(builtin_transition)
                             .with_resolution_coefficient(resolution_coefficient)
-                            .with_snowfall(snowfall);
+                            .with_snowfall(
+                                snowfall_enabled
+                                    .then(|| SnowfallOptions::randomized(random_seed())),
+                            );
 
                         if let Some((width, height)) = dimensions {
                             options = options.with_output_resolution(width, height);
@@ -641,7 +582,7 @@ impl SlideshowApp {
         dimensions: Option<(u32, u32)>,
         transition_duration: f32,
         resolution_coefficient: f32,
-        snowfall: Option<SnowfallOptions>,
+        snowfall_enabled: bool,
     ) -> Result<(), anyhow::Error> {
         // Define all transitions to generate
         let transitions = vec![
@@ -686,7 +627,9 @@ impl SlideshowApp {
 
         for (transition_type, suffix) in transitions {
             let input_dir = input_dir.clone();
-            let snowfall = snowfall.clone();
+            // The Every and Triplet modes render several videos per run, so each
+            // one gets its own seed instead of sharing a single snowfall.
+            let snowfall = snowfall_enabled.then(|| SnowfallOptions::randomized(random_seed()));
 
             let output_path = if suffix == "none" {
                 // For "none", use the base filename without suffix
@@ -734,7 +677,7 @@ impl SlideshowApp {
         dimensions: Option<(u32, u32)>,
         transition_duration: f32,
         resolution_coefficient: f32,
-        snowfall: Option<SnowfallOptions>,
+        snowfall_enabled: bool,
     ) -> Result<(), anyhow::Error> {
         // Define the three triplet transitions
         let transitions = vec![
@@ -763,7 +706,9 @@ impl SlideshowApp {
 
         for (transition_type, suffix) in transitions {
             let input_dir = input_dir.clone();
-            let snowfall = snowfall.clone();
+            // The Every and Triplet modes render several videos per run, so each
+            // one gets its own seed instead of sharing a single snowfall.
+            let snowfall = snowfall_enabled.then(|| SnowfallOptions::randomized(random_seed()));
 
             let output_path =
                 base_output_path.with_file_name(format!("{}.{}.{}", base_name, suffix, extension));
@@ -805,41 +750,27 @@ mod tests {
 
     #[test]
     fn test_snowfall_settings_default_to_disabled() {
-        let settings = SnowfallSettings::default();
-        assert!(!settings.enabled);
-        assert!(settings.to_options().is_none());
+        assert!(!SnowfallSettings::default().enabled);
     }
 
     #[test]
-    fn test_snowfall_settings_use_library_defaults() {
-        let settings = SnowfallSettings::default();
-        let defaults = SnowfallOptions::new();
+    fn test_enabled_snowfall_produces_valid_options() {
+        let options = SnowfallOptions::randomized(random_seed());
 
-        assert_eq!(settings.density, defaults.density);
-        assert_eq!(settings.speed, defaults.speed);
-        assert_eq!(settings.wind, defaults.wind);
-        assert_eq!(settings.flake_size, defaults.flake_size);
-        assert_eq!(settings.opacity, defaults.opacity);
-    }
-
-    #[test]
-    fn test_enabled_snowfall_maps_to_options() {
-        let settings = SnowfallSettings {
-            enabled: true,
-            density: 250.0,
-            speed: 2.0,
-            wind: -0.75,
-            flake_size: 12.0,
-            opacity: 0.5,
-        };
-
-        let options = settings.to_options().expect("snowfall should be enabled");
-        assert_eq!(options.density, 250.0);
-        assert_eq!(options.speed, 2.0);
-        assert_eq!(options.wind, -0.75);
-        assert_eq!(options.flake_size, 12.0);
-        assert_eq!(options.opacity, 0.5);
         assert!(options.validate().is_ok());
+    }
+
+    #[test]
+    fn test_each_render_draws_a_fresh_snowfall() {
+        let first = SnowfallOptions::randomized(random_seed());
+        let second = SnowfallOptions::randomized(random_seed());
+
+        // No two renders should land on the same look.
+        assert_ne!(
+            (first.seed, first.density, first.speed),
+            (second.seed, second.density, second.speed),
+            "consecutive renders drew the same snowfall"
+        );
     }
 
     #[test]

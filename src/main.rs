@@ -4,6 +4,7 @@ use slideshow_generator::{
     BuiltinTransition, SlideshowGenerator, SlideshowOptions, SnowfallOptions,
 };
 use std::path::PathBuf;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Parser)]
 #[command(name = "slideshow-generator")]
@@ -68,34 +69,10 @@ Available transitions:
 
     /// Add the Christmas snowfall effect over the slideshow
     ///
-    /// Every snowfall option below turns the effect on as well, so passing
-    /// `--snow-density 150` is enough without `--snow`.
+    /// Every render gets its own randomly derived snowfall, so consecutive
+    /// videos look different without any further configuration.
     #[arg(short = 's', long)]
     snow: bool,
-
-    /// Snowflakes per megapixel, per layer [default: 200]
-    #[arg(long)]
-    snow_density: Option<f32>,
-
-    /// Snow fall speed multiplier [default: 1.0]
-    #[arg(long)]
-    snow_speed: Option<f32>,
-
-    /// Horizontal wind, negative blows the snow to the left [default: 0.3]
-    #[arg(long)]
-    snow_wind: Option<f32>,
-
-    /// Snowflake diameter in pixels for 1080p [default: 8.0]
-    #[arg(long)]
-    snow_size: Option<f32>,
-
-    /// Snow opacity between 0.0 and 1.0 [default: 0.85]
-    #[arg(long)]
-    snow_opacity: Option<f32>,
-
-    /// Seed of the snowflake pattern, for reproducible results
-    #[arg(long)]
-    snow_seed: Option<u64>,
 
     /// Enable verbose logging
     #[arg(short, long)]
@@ -170,10 +147,6 @@ fn main() -> anyhow::Result<()> {
 
     info!("Found {} images and {} videos", generator.image_count(), generator.video_count());
 
-    if generator.options().snowfall.is_some() {
-        info!("Christmas snowfall enabled");
-    }
-
     info!("Generating slideshow to: {}", cli.output.display());
 
     // Generate the slideshow using the modern API
@@ -184,42 +157,35 @@ fn main() -> anyhow::Result<()> {
 
 /// Build the snowfall configuration from the CLI arguments
 ///
-/// The effect is enabled by `--snow` or by passing any of the tuning options,
-/// so `--snow-density 150` works on its own. Returns `None` when disabled.
+/// `--snow` is a plain toggle. Each run derives its own seed, which in turn
+/// drives the snow parameters and the shooting stars, so every render looks
+/// different. Returns `None` when the flag is absent.
 fn snowfall_options(cli: &Cli) -> anyhow::Result<Option<SnowfallOptions>> {
-    let tuned = cli.snow_density.is_some()
-        || cli.snow_speed.is_some()
-        || cli.snow_wind.is_some()
-        || cli.snow_size.is_some()
-        || cli.snow_opacity.is_some()
-        || cli.snow_seed.is_some();
-
-    if !cli.snow && !tuned {
+    if !cli.snow {
         return Ok(None);
     }
 
-    let mut snowfall = SnowfallOptions::new();
-
-    if let Some(density) = cli.snow_density {
-        snowfall = snowfall.with_density(density);
-    }
-    if let Some(speed) = cli.snow_speed {
-        snowfall = snowfall.with_speed(speed);
-    }
-    if let Some(wind) = cli.snow_wind {
-        snowfall = snowfall.with_wind(wind);
-    }
-    if let Some(size) = cli.snow_size {
-        snowfall = snowfall.with_flake_size(size);
-    }
-    if let Some(opacity) = cli.snow_opacity {
-        snowfall = snowfall.with_opacity(opacity);
-    }
-    if let Some(seed) = cli.snow_seed {
-        snowfall = snowfall.with_seed(seed);
-    }
-
+    let snowfall = SnowfallOptions::randomized(random_seed());
     snowfall.validate()?;
 
+    info!(
+        "Christmas snowfall enabled (seed {}, density {}, speed {}, wind {})",
+        snowfall.seed, snowfall.density, snowfall.speed, snowfall.wind
+    );
+
     Ok(Some(snowfall))
+}
+
+/// Pick a fresh seed so consecutive renders differ
+///
+/// Entropy is taken from the clock and mixed with the process id, which is
+/// enough to keep back to back runs apart. The resolved seed is logged, so a
+/// look that turns out well can be reproduced through the library API.
+fn random_seed() -> u64 {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_nanos() as u64)
+        .unwrap_or(0);
+
+    nanos ^ ((std::process::id() as u64) << 32)
 }

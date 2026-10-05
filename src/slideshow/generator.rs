@@ -391,6 +391,30 @@ impl SlideshowGenerator {
         self.images.len() + self.videos.len()
     }
 
+    /// Estimate how long the output video will run, in seconds.
+    ///
+    /// Video inputs keep their own length, which is only knowable by probing
+    /// them, so they are approximated by one slide each. The estimate only
+    /// places shooting stars, where being wrong costs a star rather than
+    /// breaking the render.
+    fn estimated_duration(&self) -> f32 {
+        let total = self.images.len() as f32 * self.options.duration_per_slide
+            + self.videos.len() as f32 * self.options.duration_per_slide;
+
+        // Every transition eats into the total by overlapping two slides.
+        let overlaps = (self.total_count().saturating_sub(1)) as f32 * self.transition_duration();
+        (total - overlaps).max(self.options.duration_per_slide)
+    }
+
+    /// Duration of a single transition, zero when none is configured
+    fn transition_duration(&self) -> f32 {
+        use crate::transitions::SlideshowTransition;
+        match &self.options.transition {
+            BuiltinTransition::None => 0.0,
+            transition => transition.duration(),
+        }
+    }
+
     /// Build the Christmas snowfall overlay for the given output size
     ///
     /// Returns an inactive plan when the snowfall is disabled or would be
@@ -399,14 +423,15 @@ impl SlideshowGenerator {
         match &self.options.snowfall {
             Some(snowfall) => {
                 debug!(
-                    "Preparing Christmas snowfall overlay (density: {}, speed: {}, wind: {})",
-                    snowfall.density, snowfall.speed, snowfall.wind
+                    "Preparing Christmas snowfall overlay (seed: {}, density: {}, speed: {}, wind: {})",
+                    snowfall.seed, snowfall.density, snowfall.speed, snowfall.wind
                 );
                 SnowfallPlan::prepare(
                     snowfall,
                     width,
                     height,
                     self.images.len() + self.videos.len(),
+                    Some(self.estimated_duration()),
                 )
             }
             None => Ok(SnowfallPlan::inactive()),

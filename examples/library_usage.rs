@@ -125,14 +125,19 @@ fn main() -> Result<()> {
 
     // Example 6: Christmas snowfall effect
     info!("6. Christmas snowfall overlay:");
-    let snowfall = SnowfallOptions::new()
-        .with_density(400.0)
-        .with_speed(1.2)
-        .with_wind(-0.6)
-        .with_flake_size(10.0)
-        .with_opacity(0.9);
+    // Each render draws its own seed, so no two videos look the same. Pass a
+    // fixed seed instead to reproduce a specific look.
+    let snowfall = SnowfallOptions::randomized(1791189322608723675);
 
-    info!("   Snowfall settings: {snowfall:?}");
+    info!(
+        "   Snowfall seed {} -> density {}, speed {}, wind {}, flake size {}, opacity {}",
+        snowfall.seed,
+        snowfall.density,
+        snowfall.speed,
+        snowfall.wind,
+        snowfall.flake_size,
+        snowfall.opacity
+    );
 
     let snow_options = SlideshowOptions::new()
         .with_output_resolution(1280, 720)

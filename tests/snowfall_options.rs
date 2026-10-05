@@ -73,3 +73,32 @@ fn snowfall_parameters_round_trip_through_the_builder() {
     assert_eq!(snowfall.seed, 1234);
     assert!(snowfall.validate().is_ok());
 }
+
+#[test]
+fn randomized_options_are_reproducible_from_a_seed() {
+    let first = SnowfallOptions::randomized(99);
+    let second = SnowfallOptions::randomized(99);
+
+    assert_eq!(first, second);
+    assert_eq!(first.seed, 99);
+}
+
+#[test]
+fn randomized_options_differ_between_seeds() {
+    let first = SnowfallOptions::randomized(1);
+    let second = SnowfallOptions::randomized(2);
+
+    assert_ne!(first, second);
+}
+
+#[test]
+fn every_randomized_option_is_renderable() {
+    // A random render must never come out invalid, which is what makes the
+    // effect safe to expose as a bare toggle.
+    for seed in 0..500 {
+        let options = SnowfallOptions::randomized(seed);
+        assert!(options.validate().is_ok(), "seed {} invalid", seed);
+        assert!(options.density > 0.0, "seed {} had no snow", seed);
+        assert!(options.opacity > 0.5, "seed {} snow too faint", seed);
+    }
+}

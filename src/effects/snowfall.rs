@@ -63,6 +63,43 @@ const MIN_FLAKE_RADIUS: f32 = 1.0;
 /// Number of snowflakes drawn per layer even on very small videos.
 const MIN_FLAKES_PER_LAYER: usize = 12;
 
+/// Label of the composited snow stream, which the shooting stars then overlay.
+const SNOW_OUTPUT_LABEL_FINAL: &str = "snowdone";
+
+/// Chance that a video gets any shooting stars at all. Snow alone already looks
+/// complete, so stars stay a garnish rather than a fixture.
+const STAR_INCLUDE_CHANCE: f32 = 0.55;
+
+/// Upper bound on shooting stars in one video. Sparse on purpose, several stars
+/// in quick succession reads as a bug rather than a sky.
+const MAX_STARS: usize = 3;
+
+/// Shortest gap in seconds between two shooting stars.
+const MIN_STAR_GAP: f32 = 1.5;
+
+/// How long a shooting star takes to cross the frame, in seconds.
+const STAR_TRAVEL: (f32, f32) = (0.45, 0.9);
+
+/// Fraction of the frame a star crosses, so it never has to fully exit.
+const STAR_TRAVEL_FRACTION: f32 = 0.85;
+
+/// Peak brightness of the brightest shooting star.
+const STAR_PEAK_BRIGHTNESS: f32 = 0.85;
+
+/// Marker for "parked off screen" inside an FFmpeg overlay expression. Large
+/// enough to sit outside any frame we can be asked to render.
+const PARKED_POSITION: i64 = -100_000;
+
+/// Bounds the randomized snowfall is sampled from.
+///
+/// The full validated range would sometimes render snow that is invisible or
+/// absurd, so jitter stays inside bands that are always presentable.
+const RANDOM_DENSITY: (f32, f32) = (120.0, 420.0);
+const RANDOM_SPEED: (f32, f32) = (0.65, 1.5);
+const RANDOM_WIND: (f32, f32) = (-1.2, 1.4);
+const RANDOM_FLAKE_SIZE: (f32, f32) = (5.0, 13.0);
+const RANDOM_OPACITY: (f32, f32) = (0.7, 0.95);
+
 /// The snow layers, ordered from the distant background to the foreground.
 ///
 /// Four layers with different speeds, wind directions and sway phases are what
@@ -147,6 +184,25 @@ impl SnowfallOptions {
     /// Create a new snowfall configuration with default values
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Create a configuration derived from `seed`.
+    ///
+    /// Every run picks a different seed, so consecutive videos get visibly
+    /// different snowfall without anyone having to pass any options. The seed
+    /// stays the single source of randomness: flake placement, the parameters
+    /// below and the shooting stars are all derived from it, so a given seed
+    /// always reproduces the same look.
+    pub fn randomized(seed: u64) -> Self {
+        let mut rng = Rng::new(seed);
+        Self {
+            density: rng.between(RANDOM_DENSITY),
+            speed: rng.between(RANDOM_SPEED),
+            wind: rng.between(RANDOM_WIND),
+            flake_size: rng.between(RANDOM_FLAKE_SIZE),
+            opacity: rng.between(RANDOM_OPACITY),
+            seed,
+        }
     }
 
     /// Set the snowflake density per megapixel, per layer
@@ -245,11 +301,30 @@ pub struct SnowflakeLayer {
     pub sway_phase: f32,
 }
 
+/// A single shooting star crossing the frame
+#[derive(Debug, Clone)]
+pub struct ShootingStar {
+    /// When the star becomes visible, in seconds
+    pub start: f32,
+    /// How long the crossing takes, in seconds
+    pub duration: f32,
+    /// Horizontal start position in pixels
+    pub x: f32,
+    pub y: f32,
+    /// Horizontal travel per second in pixels, signed
+    pub velocity_x: f32,
+    /// Vertical travel per second in pixels, signed
+    pub velocity_y: f32,
+    /// Peak brightness between `0.0` and `1.0`
+    pub brightness: f32,
+}
+
 /// A prepared snowfall overlay: generated tiles plus the filter chain and the
 /// FFmpeg inputs needed to composite them over a finished slideshow
 #[derive(Debug)]
 pub struct SnowfallPlan {
     layers: Vec<SnowflakeLayer>,
+    stars: Vec<ShootingStar>,
     input_args: Vec<String>,
     filter_chain: String,
     input_label: String,
@@ -265,11 +340,17 @@ impl SnowfallPlan {
     /// snow is composited over. `media_input_count` is the number of inputs the
     /// slideshow itself already uses, so the snow tiles can be appended after
     /// them.
+    ///
+    /// `duration_hint` is an estimate of the output length in seconds, used to
+    /// place the shooting stars. It is only a hint: a star scheduled past the
+    /// real end of the video is simply never drawn, so an inaccurate estimate
+    /// costs stars rather than breaking the render.
     pub fn prepare(
         options: &SnowfallOptions,
         video_width: u32,
         video_height: u32,
         media_input_count: usize,
+        duration_hint: Option<f32>,
     ) -> Result<Self> {
         options.validate()?;
 
@@ -346,14 +427,48 @@ impl SnowfallPlan {
             layers.push(layer);
         }
 
+        // Shooting stars are decided first, because whether there are any decides
+        // what the snow chain should hand over to.
+        let stars = match duration_hint.filter(|d| *d > 0.0) {
+            Some(duration) => plan_stars(options, video_width, video_height, duration),
+            None => Vec::new(),
+        };
+
+        let snow_final_label = if stars.is_empty() {
+            SNOW_OUTPUT_LABEL
+        } else {
+            SNOW_OUTPUT_LABEL_FINAL
+        };
+
         filter_chain.push_str(&snow_overlay_chain(
             &layers,
             period_width,
             period_height,
+            snow_final_label,
         ));
+
+        if !stars.is_empty() {
+            let star_input = media_input_count + layers.len();
+            let star_tile = temp_dir.path().join("star.png");
+            build_star_sprite(star_width(video_width), star_thickness(video_height))
+                .save(&star_tile)
+                .with_context(|| format!("Failed to write star sprite: {}", star_tile.display()))?;
+
+            debug!(
+                "Shooting stars: {} over ~{:.1}s (sprite {}px wide)",
+                stars.len(),
+                duration_hint.unwrap_or_default(),
+                star_width(video_width),
+            );
+
+            filter_chain.push(';');
+            filter_chain.push_str(&star_filter_chain(star_input, &stars));
+            input_args.push(format!("-loop|1|-i|{}", star_tile.display()));
+        }
 
         Ok(Self {
             layers,
+            stars,
             input_args,
             filter_chain,
             input_label: SNOW_INPUT_LABEL.to_string(),
@@ -366,6 +481,7 @@ impl SnowfallPlan {
     pub fn inactive() -> Self {
         Self {
             layers: Vec::new(),
+            stars: Vec::new(),
             input_args: Vec::new(),
             filter_chain: String::new(),
             input_label: SNOW_INPUT_LABEL.to_string(),
@@ -382,6 +498,11 @@ impl SnowfallPlan {
     /// The generated snow layers
     pub fn layers(&self) -> &[SnowflakeLayer] {
         &self.layers
+    }
+
+    /// The shooting stars composited over the snow
+    pub fn stars(&self) -> &[ShootingStar] {
+        &self.stars
     }
 
     /// FFmpeg input arguments required by the overlay
@@ -428,11 +549,12 @@ impl Drop for TempDir {
 }
 
 /// Build the overlay filter chain starting from `[snowbase]` and ending in
-/// `[outv]`
+/// `final_label`
 fn snow_overlay_chain(
     layers: &[SnowflakeLayer],
     period_width: u32,
     period_height: u32,
+    final_label: &str,
 ) -> String {
     let mut chain = format!("[{}]format=yuva420p[snow_bg];", SNOW_INPUT_LABEL);
 
@@ -440,7 +562,7 @@ fn snow_overlay_chain(
         // The last layer produces the final output, every other one feeds the
         // next overlay. Tile labels stay untouched, they are read inputs.
         let output = if index + 1 == layers.len() {
-            SNOW_OUTPUT_LABEL.to_string()
+            final_label.to_string()
         } else {
             format!("snow_overlay{}", index)
         };
@@ -475,13 +597,188 @@ fn snow_overlay_chain(
             h = period_height,
         ));
 
-        if output != SNOW_OUTPUT_LABEL {
+        if output != final_label {
             chain.push_str(&format!("[{output}]format=yuva420p[snow_bg];"));
         }
     }
 
     chain.pop(); // drop the trailing ';'
     chain
+}
+
+/// Sprite size helpers, kept relative to the frame so a star looks the same at
+/// any resolution
+fn star_width(video_width: u32) -> u32 {
+    ((video_width as f32 * 0.26).round() as u32).max(8)
+}
+
+fn star_thickness(video_height: u32) -> u32 {
+    ((video_height as f32 * 0.018).round() as u32).max(4)
+}
+
+/// Build the shooting star filter chain, ending in `[outv]`
+///
+/// One star sprite input is split into as many branches as there are stars, and
+/// each branch is gated with `enable='between(t, ...)'`. Outside its window a
+/// branch is parked far off screen, so a star that would land past the end of
+/// the video is simply never drawn rather than leaving a partial frame.
+fn star_filter_chain(star_input: usize, stars: &[ShootingStar]) -> String {
+    let mut chain =
+        format!("[{input}:v]format=rgba,fps={fps},setsar=1[star_src];", input = star_input, fps = SNOW_FRAME_RATE);
+
+    let mut branches = Vec::with_capacity(stars.len());
+    for (index, star) in stars.iter().enumerate() {
+        let raw = format!("star{index}_src");
+        let label = format!("star{index}");
+        chain.push_str(&format!("[star_src]split={n}[{raw}];", n = stars.len()));
+        // One sprite serves every star, so each branch scales its own alpha to
+        // get an individual brightness without another input.
+        chain.push_str(&format!(
+            "[{raw}]colorchannelmixer=aa={alpha}[{label}];",
+            alpha = format_number(star.brightness),
+        ));
+        branches.push(label);
+    }
+
+    // The snow is opaque by now, so the star blend can stay in the default
+    // format instead of paying for an extra alpha conversion.
+    chain.push_str(&format!("[{SNOW_OUTPUT_LABEL_FINAL}]format=yuva420p[star_bg];"));
+
+    for (index, star) in stars.iter().enumerate() {
+        let input = &branches[index];
+        let output = if index + 1 == stars.len() {
+            SNOW_OUTPUT_LABEL.to_string()
+        } else {
+            format!("star_out{}", index)
+        };
+
+        chain.push_str(&format!(
+            "[star_bg][{input}]overlay=x='if(between(t,{start},{end}),{x}+({vx})*(t-{start}),{parked})':y='if(between(t,{start},{end}),{y}+({vy})*(t-{start}),{parked})':enable='between(t,{start},{end})':eof_action=pass:format=auto[{output}];",
+            input = input,
+            start = format_number(star.start),
+            end = format_number(star.start + star.duration),
+            x = format_number(star.x),
+            y = format_number(star.y),
+            vx = format_number(star.velocity_x),
+            vy = format_number(star.velocity_y),
+            parked = PARKED_POSITION,
+            output = output,
+        ));
+
+        // Re-arm the running background for the next star.
+        if index + 1 < stars.len() {
+            chain.push_str(&format!("[{output}]format=yuva420p[star_bg];"));
+        }
+    }
+
+    chain.pop(); // drop the trailing ';'
+    chain
+}
+
+/// Decide which shooting stars to place, and when
+///
+/// The star sprite is drawn once at full brightness and each instance modulates
+/// its own opacity, so the count stays at one extra input no matter how many
+/// stars appear.
+fn plan_stars(
+    options: &SnowfallOptions,
+    video_width: u32,
+    video_height: u32,
+    duration: f32,
+) -> Vec<ShootingStar> {
+    // Derived from the same seed as the snow, so one seed reproduces everything.
+    let mut rng = Rng::new(options.seed ^ 0x5741_5253_4E47_4C4F);
+
+    if rng.next_f32() >= STAR_INCLUDE_CHANCE {
+        debug!("No shooting stars in this one");
+        return Vec::new();
+    }
+
+    let frame = video_width as f32 * video_height as f32;
+    // Long videos would otherwise get an absurd number of stars; scale with
+    // length but stay well inside the cap.
+    let budget = (duration / 6.0).floor() as usize;
+    let count = 1 + rng.below(budget.min(MAX_STARS.saturating_sub(1)));
+
+    let span = STAR_TRAVEL_FRACTION * (video_width + video_height) as f32 / 2.0;
+    let mut stars = Vec::with_capacity(count);
+    // When the next star may start. The first one is free to appear right away,
+    // otherwise short videos would never get any at all.
+    let mut available_from = 0.0;
+
+    for _ in 0..count {
+        let travel = rng.between(STAR_TRAVEL);
+
+        // Scatter the star within whatever window is still free, then leave a
+        // gap before the next one so they never bunch up.
+        let free = duration - available_from - travel;
+        if free <= 0.0 {
+            break;
+        }
+        let start = available_from + rng.range(0.0, free.min(MIN_STAR_GAP * 3.0));
+        available_from = start + travel + MIN_STAR_GAP;
+
+        // A star enters from a random side and crosses on a shallow diagonal.
+        let from_left = rng.next_f32() < 0.5;
+        let horizontal = rng.range(0.6, 1.0) * frame.sqrt() / span.max(1.0);
+        let vertical = rng.range(0.15, 0.45);
+        let speed = span / travel;
+
+        let x = if from_left { -0.1 } else { 1.1 } * video_width as f32;
+        let y = rng.range(0.05, 0.6) * video_height as f32;
+
+        stars.push(ShootingStar {
+            start,
+            duration: travel,
+            x,
+            y,
+            velocity_x: if from_left {
+                speed * horizontal
+            } else {
+                -speed * horizontal
+            },
+            velocity_y: speed * vertical,
+            brightness: rng.range(0.7, STAR_PEAK_BRIGHTNESS),
+        });
+    }
+
+    stars
+}
+
+/// Draw the shooting star sprite: a bright head with a tapering tail
+fn build_star_sprite(width: u32, thickness: u32) -> RgbaImage {
+    let mut sprite = RgbaImage::new(width, thickness);
+    let half = (thickness as f32 - 1.0) / 2.0;
+
+    for y in 0..thickness {
+        for x in 0..width {
+            // Distance from the centre line, 1.0 at the edges.
+            let across = if half <= 0.0 {
+                0.0
+            } else {
+                ((y as f32 - half) / half).abs()
+            };
+
+            // Gaussian across the streak, so the edges fade out instead of
+            // ending in a hard rectangle.
+            let glow = (-3.0 * across * across).exp();
+
+            // `along` runs from 0 at the tail to 1 at the head.
+            let along = x as f32 / (width as f32 - 1.0).max(1.0);
+            let taper = along.powf(2.2);
+            // A short flare at the very front reads as the head of the comet.
+            let head = ((along - 0.86) / 0.14).clamp(0.0, 1.0);
+
+            let alpha = (glow * (taper * 0.75 + head * head * 0.9)).clamp(0.0, 1.0);
+            if alpha <= 0.0 {
+                continue;
+            }
+
+            sprite.put_pixel(x, y, Rgba([255, 255, 255, (alpha * 255.0) as u8]));
+        }
+    }
+
+    sprite
 }
 
 /// Procedurally draw a seamlessly tileable snow tile
@@ -703,6 +1000,20 @@ impl Rng {
     fn range(&mut self, low: f32, high: f32) -> f32 {
         low + (high - low) * self.next_f32()
     }
+
+    /// Uniform float sampled from a `(low, high)` band
+    fn between(&mut self, band: (f32, f32)) -> f32 {
+        self.range(band.0, band.1)
+    }
+
+    /// Uniform integer in `[0, bound)`
+    fn below(&mut self, bound: usize) -> usize {
+        if bound == 0 {
+            0
+        } else {
+            (self.next_f32() * bound as f32) as usize % bound
+        }
+    }
 }
 
 #[cfg(test)]
@@ -794,7 +1105,7 @@ mod tests {
 
     #[test]
     fn test_offsets_are_shifted_back_to_cover_the_frame() {
-        let plan = SnowfallPlan::prepare(&SnowfallOptions::new(), 320, 180, 0).unwrap();
+        let plan = SnowfallPlan::prepare(&SnowfallOptions::new(), 320, 180, 0, None).unwrap();
         let chain = plan.filter_chain();
 
         // `overlay` places a tile by its top left corner, so a plain `mod()`
@@ -873,7 +1184,7 @@ mod tests {
 
     #[test]
     fn test_plan_builds_inputs_and_overlay_chain() {
-        let plan = SnowfallPlan::prepare(&SnowfallOptions::new(), 640, 360, 3).unwrap();
+        let plan = SnowfallPlan::prepare(&SnowfallOptions::new(), 640, 360, 3, None).unwrap();
 
         assert!(plan.is_active());
         assert_eq!(plan.layers().len(), LAYER_SPECS.len());
@@ -914,7 +1225,7 @@ mod tests {
 
     #[test]
     fn test_plan_without_media_inputs_starts_at_zero() {
-        let plan = SnowfallPlan::prepare(&SnowfallOptions::new(), 320, 180, 0).unwrap();
+        let plan = SnowfallPlan::prepare(&SnowfallOptions::new(), 320, 180, 0, None).unwrap();
 
         assert!(plan.filter_chain().contains("[0:v]format=rgba"));
         assert!(plan.filter_chain().contains("[1:v]format=rgba"));
@@ -922,7 +1233,7 @@ mod tests {
 
     #[test]
     fn test_plan_writes_tiles_and_cleans_them_up() {
-        let plan = SnowfallPlan::prepare(&SnowfallOptions::new(), 320, 180, 1).unwrap();
+        let plan = SnowfallPlan::prepare(&SnowfallOptions::new(), 320, 180, 1, None).unwrap();
         let paths: Vec<PathBuf> = plan.layers().iter().map(|layer| layer.tile.clone()).collect();
 
         for path in &paths {
@@ -949,7 +1260,7 @@ mod tests {
     fn test_bailing_out_early_produces_an_inactive_plan() {
         // A transparent first layer must not leave any snow inputs behind, the
         // temporary directory is cleaned up by `TempDir::drop`.
-        let plan = SnowfallPlan::prepare(&SnowfallOptions::new().with_density(0.0), 320, 180, 1)
+        let plan = SnowfallPlan::prepare(&SnowfallOptions::new().with_density(0.0), 320, 180, 1, None)
             .unwrap();
 
         assert!(!plan.is_active());
@@ -960,8 +1271,8 @@ mod tests {
 
     #[test]
     fn test_concurrent_plans_do_not_share_directories() {
-        let first = SnowfallPlan::prepare(&SnowfallOptions::new(), 160, 90, 0).unwrap();
-        let second = SnowfallPlan::prepare(&SnowfallOptions::new(), 160, 90, 0).unwrap();
+        let first = SnowfallPlan::prepare(&SnowfallOptions::new(), 160, 90, 0, None).unwrap();
+        let second = SnowfallPlan::prepare(&SnowfallOptions::new(), 160, 90, 0, None).unwrap();
 
         let first_dir = first.layers()[0].tile.parent().unwrap().to_path_buf();
         let second_dir = second.layers()[0].tile.parent().unwrap().to_path_buf();
@@ -972,7 +1283,7 @@ mod tests {
     #[test]
     fn test_plan_is_inactive_without_snow() {
         let plan =
-            SnowfallPlan::prepare(&SnowfallOptions::new().with_density(0.0), 640, 360, 3).unwrap();
+            SnowfallPlan::prepare(&SnowfallOptions::new().with_density(0.0), 640, 360, 3, None).unwrap();
 
         assert!(!plan.is_active());
         assert!(plan.layers().is_empty());
@@ -982,7 +1293,7 @@ mod tests {
 
     #[test]
     fn test_plan_scales_large_panels_down() {
-        let plan = SnowfallPlan::prepare(&SnowfallOptions::new(), 3840, 2160, 2).unwrap();
+        let plan = SnowfallPlan::prepare(&SnowfallOptions::new(), 3840, 2160, 2, None).unwrap();
 
         // A 4K video is drawn at a capped panel size and scaled back up. The
         // tile covers TILE_REPEATS panels of the capped size.
@@ -992,8 +1303,250 @@ mod tests {
 
     #[test]
     fn test_plan_rejects_invalid_sizes_and_options() {
-        assert!(SnowfallPlan::prepare(&SnowfallOptions::new(), 0, 360, 1).is_err());
-        assert!(SnowfallPlan::prepare(&SnowfallOptions::new().with_opacity(2.0), 640, 360, 1).is_err());
+        assert!(SnowfallPlan::prepare(&SnowfallOptions::new(), 0, 360, 1, None).is_err());
+        assert!(SnowfallPlan::prepare(&SnowfallOptions::new().with_opacity(2.0), 640, 360, 1, None).is_err());
+    }
+
+    #[test]
+    fn test_randomized_is_reproducible_and_varies() {
+        let first = SnowfallOptions::randomized(12345);
+        let second = SnowfallOptions::randomized(12345);
+        let other = SnowfallOptions::randomized(12346);
+
+        assert_eq!(first, second, "the same seed must reproduce the look");
+        assert_ne!(first, other, "a different seed should look different");
+        assert_eq!(first.seed, 12345);
+    }
+
+    #[test]
+    fn test_randomized_stays_inside_presentable_bands() {
+        // Every sampled value has to be renderable, otherwise a random render
+        // could come out invisible or absurd.
+        for seed in 0..2000u64 {
+            let options = SnowfallOptions::randomized(seed);
+            assert!(
+                options.validate().is_ok(),
+                "seed {} produced an invalid configuration",
+                seed
+            );
+            assert!(
+                (RANDOM_DENSITY.0..RANDOM_DENSITY.1).contains(&options.density),
+                "seed {} density out of band",
+                seed
+            );
+            assert!(
+                (RANDOM_SPEED.0..RANDOM_SPEED.1).contains(&options.speed),
+                "seed {} speed out of band",
+                seed
+            );
+            assert!(
+                (RANDOM_WIND.0..RANDOM_WIND.1).contains(&options.wind),
+                "seed {} wind out of band",
+                seed
+            );
+            assert!(
+                (RANDOM_FLAKE_SIZE.0..RANDOM_FLAKE_SIZE.1).contains(&options.flake_size),
+                "seed {} flake size out of band",
+                seed
+            );
+            // Snow has to actually be visible.
+            assert!(options.opacity >= 0.5, "seed {} opacity too low", seed);
+        }
+    }
+
+    #[test]
+    fn test_stars_are_optional_and_bounded() {
+        let mut with_stars = 0;
+
+        for seed in 0..400u64 {
+            let options = SnowfallOptions::randomized(seed);
+            let stars = plan_stars(&options, 1920, 1080, 12.0);
+
+            assert!(
+                stars.len() <= MAX_STARS,
+                "seed {} planned {} stars, over the cap",
+                seed,
+                stars.len()
+            );
+
+            // Stars must be spaced out, never bunched at the start.
+            for pair in stars.windows(2) {
+                let gap = pair[1].start - (pair[0].start + pair[0].duration);
+                assert!(
+                    gap >= 0.0,
+                    "seed {} scheduled stars that overlap",
+                    seed
+                );
+            }
+
+            // Every star has to fit inside the video it was planned for.
+            for star in &stars {
+                assert!(star.start >= 0.0, "seed {} star before the start", seed);
+                assert!(
+                    star.start + star.duration <= 12.0,
+                    "seed {} star runs past the end",
+                    seed
+                );
+                assert!(star.velocity_x != 0.0, "seed {} star is stationary", seed);
+                assert!(
+                    (0.0..=1.0).contains(&star.brightness),
+                    "seed {} star brightness out of range",
+                    seed
+                );
+            }
+
+            if !stars.is_empty() {
+                with_stars += 1;
+            }
+        }
+
+        // The coin flip has to actually produce both outcomes, otherwise stars
+        // would be a permanent fixture rather than the garnish they should be.
+        assert!(with_stars > 0, "no seed ever produced a star");
+        assert!(
+            with_stars < 400,
+            "every seed produced stars, the include chance is ignored"
+        );
+    }
+
+    #[test]
+    fn test_short_videos_still_get_a_star() {
+        // A two second clip has to be able to fit a star, otherwise the effect
+        // silently disappears on exactly the shortest renders.
+        let mut planned = 0;
+
+        for seed in 0..400u64 {
+            let options = SnowfallOptions::randomized(seed);
+            let stars = plan_stars(&options, 1920, 1080, 2.0);
+
+            for star in &stars {
+                assert!(star.start >= 0.0);
+                assert!(
+                    star.start + star.duration <= 2.0,
+                    "seed {} star does not fit in a 2s video",
+                    seed
+                );
+            }
+
+            if !stars.is_empty() {
+                planned += 1;
+            }
+        }
+
+        assert!(planned > 0, "no 2s video ever got a star");
+    }
+
+    #[test]
+    fn test_star_chain_gates_each_star_by_time() {
+        let stars = vec![
+            ShootingStar {
+                start: 1.0,
+                duration: 0.5,
+                x: -10.0,
+                y: 20.0,
+                velocity_x: 900.0,
+                velocity_y: 120.0,
+                brightness: 0.8,
+            },
+            ShootingStar {
+                start: 3.0,
+                duration: 0.4,
+                x: 900.0,
+                y: 40.0,
+                velocity_x: -800.0,
+                velocity_y: -60.0,
+                brightness: 0.5,
+            },
+        ];
+
+        let chain = star_filter_chain(7, &stars);
+
+        // One sprite input, split into one branch per star.
+        assert!(
+            chain.contains("[7:v]format=rgba"),
+            "sprite input missing from: {}",
+            chain
+        );
+        assert!(chain.contains("split=2"));
+        // Each branch scales the shared sprite to its own brightness.
+        assert!(
+            chain.contains("colorchannelmixer=aa=0.8"),
+            "brightness not applied: {}",
+            chain
+        );
+        assert!(
+            chain.contains("colorchannelmixer=aa=0.5"),
+            "brightness not applied: {}",
+            chain
+        );
+        // The last star produces the final output, so the chain ends there.
+        assert!(
+            chain.ends_with("[outv]"),
+            "chain does not end in the output label: {}",
+            chain
+        );
+
+        // Each star is gated to its own window and parked outside of it.
+        assert!(chain.contains("enable='between(t,1,1.5)'"));
+        assert!(chain.contains("enable='between(t,3,3.4)'"));
+        assert_eq!(chain.matches(&PARKED_POSITION.to_string()).count(), 4);
+    }
+
+    #[test]
+    fn test_star_sprite_is_bright_at_the_head() {
+        let sprite = build_star_sprite(64, 8);
+
+        assert_eq!(sprite.dimensions(), (64, 8));
+
+        let alpha_at = |x: u32, y: u32| sprite.get_pixel(x, y).0[3];
+        let middle = 4;
+
+        // The head end is brighter than the tail end.
+        assert!(
+            alpha_at(63, middle) > alpha_at(0, middle),
+            "sprite is brightest at the tail"
+        );
+        // The centre line is brighter than the edge.
+        assert!(
+            alpha_at(63, middle) > alpha_at(63, 0),
+            "sprite has no vertical falloff"
+        );
+    }
+
+    #[test]
+    fn test_plan_without_duration_hint_has_no_stars() {
+        let plan = SnowfallPlan::prepare(&SnowfallOptions::new(), 640, 360, 3, None).unwrap();
+        assert!(plan.stars().is_empty());
+
+        // A zero or negative hint is treated the same way rather than being
+        // allowed to plan stars at negative times.
+        let plan = SnowfallPlan::prepare(&SnowfallOptions::new(), 640, 360, 3, Some(0.0)).unwrap();
+        assert!(plan.stars().is_empty());
+    }
+
+    #[test]
+    fn test_plan_with_duration_hint_plans_stars() {
+        // Sweep seeds until one includes stars, then check the chain is wired up.
+        for seed in 0..400u64 {
+            let options = SnowfallOptions::randomized(seed);
+            let plan = SnowfallPlan::prepare(&options, 640, 360, 3, Some(12.0)).unwrap();
+
+            if !plan.stars().is_empty() {
+                assert!(plan.input_args().len() > LAYER_SPECS.len());
+                assert!(plan.filter_chain().contains("split="));
+
+                // The snow chain has to be separated from the star chain by a
+                // semicolon, otherwise FFmpeg reads them as one broken filter.
+                assert!(
+                    plan.filter_chain().contains("[snowdone];"),
+                    "star chain is not separated from the snow chain: {}",
+                    plan.filter_chain()
+                );
+                return;
+            }
+        }
+
+        panic!("no seed produced stars over a 12s video");
     }
 
     #[test]

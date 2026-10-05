@@ -90,23 +90,8 @@ Options:
   -s, --snow
           Add the Christmas snowfall effect over the slideshow
 
-      --snow-density <SNOW_DENSITY>
-          Snowflakes per megapixel, per layer [default: 200]
-
-      --snow-speed <SNOW_SPEED>
-          Snow fall speed multiplier [default: 1.0]
-
-      --snow-wind <SNOW_WIND>
-          Horizontal wind, negative blows the snow to the left [default: 0.3]
-
-      --snow-size <SNOW_SIZE>
-          Snowflake diameter in pixels for 1080p [default: 8.0]
-
-      --snow-opacity <SNOW_OPACITY>
-          Snow opacity between 0.0 and 1.0 [default: 0.85]
-
-      --snow-seed <SNOW_SEED>
-          Seed of the snowflake pattern, for reproducible results
+          Every render draws its own randomly derived snowfall, so consecutive
+          videos look different without any further configuration.
   -v, --verbose
           Enable verbose logging
   -h, --help
@@ -115,35 +100,35 @@ Options:
 
 ### Christmas snowfall
 
-Add `--snow` to enable the effect with its default settings:
+Add `--snow` to enable the effect:
 
 ```bash
 slideshow-generator -i photos -o christmas.mp4 --snow
 ```
 
-Any of the tuning options turns the effect on as well, so `--snow-density 400`
-is enough without `--snow`:
+That is the whole interface. Each render draws a fresh seed, and everything
+visible derives from it: how heavy the snow is, how fast it falls, which way the
+wind blows, the flake size, and whether any shooting stars streak across the
+sky. Six videos rendered with the same command therefore come out looking
+genuinely different, with no configuration at all.
 
-```bash
-slideshow-generator -i photos -o christmas.mp4 \
-  --snow-density 400 --snow-speed 1.4 --snow-wind -0.8 \
-  --snow-size 12 --snow-opacity 0.9
+The resolved seed is printed on startup, so a look that turns out well can be
+reproduced through the library API:
+
+```rust
+use slideshow_generator::{SlideshowOptions, SnowfallOptions};
+
+let snowfall = SnowfallOptions::randomized(1791189322608723675);
+let options = SlideshowOptions::new().with_snowfall(Some(snowfall));
 ```
-
-| Option | Default | Description |
-| --- | --- | --- |
-| `--snow` | off | Enable the effect |
-| `--snow-density` | `200` | Snowflakes per megapixel, per layer |
-| `--snow-speed` | `1.0` | Fall speed multiplier |
-| `--snow-wind` | `0.3` | Horizontal drift, negative blows left |
-| `--snow-size` | `8.0` | Snowflake diameter in pixels at 1080p |
-| `--snow-opacity` | `0.85` | Snow opacity between 0.0 and 1.0 |
-| `--snow-seed` | random | Seed for a reproducible pattern |
 
 The snow is generated procedurally, no external assets are needed. Four layers
 are composited for depth, each with its own speed, drift direction and sway, so
 the flakes move independently rather than sliding across as one block. The
 pattern repeats seamlessly over any duration.
+
+Shooting stars are a garnish: a video may get none, or up to three, spread
+across it and never overlapping.
 
 ### Library API
 
@@ -204,9 +189,11 @@ fn main() -> anyhow::Result<()> {
 }
 ```
 
-Use `with_snowfall_enabled()` for the defaults and `with_snowfall(None)` to turn
-the effect back off. The snow is generated procedurally, so no assets are
-required and the animation loops seamlessly for any duration.
+Use `with_snowfall_enabled()` for a fresh random snowfall per render and
+`with_snowfall(None)` to turn the effect back off. To pin a specific look, pass
+`SnowfallOptions::randomized(seed)` as above. The snow is generated
+procedurally, so no assets are required and the animation loops seamlessly for
+any duration.
 
 #### Manual File Management
 

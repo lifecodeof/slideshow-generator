@@ -32,11 +32,13 @@
 //!
 //! ## Christmas snowfall
 //!
+//! Each render draws its own seed, so no two videos look the same.
+//!
 //! ```rust,no_run
 //! use slideshow_generator::{SlideshowGenerator, SlideshowOptions, SnowfallOptions};
 //!
 //! # fn main() -> anyhow::Result<()> {
-//! let snowfall = SnowfallOptions::new().with_density(45.0).with_wind(0.8);
+//! let snowfall = SnowfallOptions::randomized(1791189322608723675);
 //! let options = SlideshowOptions::new()
 //!     .with_output_resolution(1920, 1080)
 //!     .with_snowfall(Some(snowfall));
